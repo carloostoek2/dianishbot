@@ -16,6 +16,8 @@ log = logging.getLogger("diana.training")
 _cfg: dict[str, Any] = {}
 pending_reviews: dict[str, dict] = {}
 pending_correction: dict[int, str] = {}
+pending_dispatch: dict[str, dict] = {}
+pending_dispatch_by_chat: dict[int, str] = {}
 last_auto: dict[int, dict] = {}
 _notify_queue: list[dict] = []
 _reviewer_id: int | None = None
@@ -208,10 +210,158 @@ async def judge_response(user_message: str, bot_response: str) -> dict:
         return {"score": 3, "generic": False, "reason": "juez falló"}
 
 
-def _should_notify(judge: dict) -> bool:
+def _should_notify(review: dict) -> bool:
     if _cfg.get("review_all", True):
         return True
-    return judge.get("score", 5) < 4 or judge.get("generic", False)
+    return review.get("judge_score", 5) < 4 or review.get("judge_generic", False)
+
+
+async def _create_review(
+    chat_id: int,
+    vip_user_id: int,
+    username: str,
+    user_message: str,
+    bot_response: str,
+    last_assistant: str | None,
+    *,
+    awaiting_send: bool = False,
+) -> dict:
+    review_id = _next_review_id()
+    flags = run_heuristics(user_message, bot_response, last_assistant)
+    if awaiting_send:
+        judge = {"score": 3, "generic": False, "reason": "revisión manual pre-envío"}
+    else:
+        judge = await judge_response(user_message, bot_response)
+
+    review = {
+        "id": review_id,
+        "chat_id": chat_id,
+        "vip_user_id": vip_user_id,
+        "vip_username": username,
+        "user_message": user_message,
+        "bot_response": bot_response,
+        "heuristic_flags": flags,
+        "judge_score": judge.get("score", 3),
+        "judge_generic": judge.get("generic", False),
+        "judge_reason": judge.get("reason", ""),
+        "status": "awaiting_send" if awaiting_send else "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    pending_reviews[review_id] = review
+    _save_pending()
+    return review
+
+
+def cancel_dispatch_for_chat(chat_id: int) -> str | None:
+    review_id = pending_dispatch_by_chat.pop(chat_id, None)
+    if not review_id:
+        return None
+    pending_dispatch.pop(review_id, None)
+    review = pending_reviews.get(review_id)
+    if review and review["status"] == "awaiting_send":
+        review["status"] = "superseded"
+        _save_pending()
+    return review_id
+
+
+async def notify_llm_failure(
+    bot,
+    *,
+    chat_id: int,
+    bc_id: str,
+    username: str,
+    gen: int,
+    vip_user_id: int,
+    user_message: str,
+) -> None:
+    """Avisa a Diana cuando el LLM no generó respuesta — puede escribir una manual."""
+    reviewer_id = get_reviewer_id()
+    if not reviewer_id:
+        log.warning("LLM falló y reviewer ID no disponible")
+        return
+
+    review_id = _next_review_id()
+    review = {
+        "id": review_id,
+        "chat_id": chat_id,
+        "vip_user_id": vip_user_id,
+        "vip_username": username,
+        "user_message": user_message,
+        "bot_response": "(sin respuesta del modelo)",
+        "heuristic_flags": ["llm_failure"],
+        "judge_score": 0,
+        "judge_generic": True,
+        "judge_reason": "El modelo no generó texto",
+        "status": "awaiting_send",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    pending_reviews[review_id] = review
+    _save_pending()
+
+    pending_dispatch[review_id] = {
+        "chat_id": chat_id,
+        "bc_id": bc_id,
+        "username": username,
+        "gen": gen,
+    }
+    pending_dispatch_by_chat[chat_id] = review_id
+    pending_correction[reviewer_id] = review_id
+    review["status"] = "awaiting_correction"
+    _save_pending()
+
+    num = review_id.replace("rev-", "")
+    text = (
+        f"LLM sin respuesta — #{num} {username}\n"
+        f"{'─' * 25}\n"
+        f"Él: {user_message[:300]}\n"
+        f"{'─' * 25}\n"
+        f"Escribe la respuesta que quieres enviar:"
+    )
+    try:
+        await bot.send_message(chat_id=reviewer_id, text=text)
+        log.info(f"LLM failure notificado a Diana: {review_id}")
+    except Exception as e:
+        log.error(f"Error notificando LLM failure: {e}")
+
+
+async def request_pre_approval(
+    bot,
+    *,
+    chat_id: int,
+    bc_id: str,
+    username: str,
+    gen: int,
+    vip_user_id: int,
+    user_message: str,
+    bot_response: str,
+    last_assistant: str | None = None,
+) -> None:
+    if not _cfg.get("enabled", True):
+        deliver = _cfg.get("deliver_vip")
+        if deliver:
+            await deliver(
+                bot, chat_id=chat_id, bc_id=bc_id, username=username,
+                gen=gen, text=bot_response,
+            )
+        return
+
+    cancel_dispatch_for_chat(chat_id)
+
+    review = await _create_review(
+        chat_id, vip_user_id, username, user_message, bot_response,
+        last_assistant, awaiting_send=True,
+    )
+    review_id = review["id"]
+
+    pending_dispatch[review_id] = {
+        "chat_id": chat_id,
+        "bc_id": bc_id,
+        "username": username,
+        "gen": gen,
+    }
+    pending_dispatch_by_chat[chat_id] = review_id
+
+    await notify_reviewer(bot, review)
 
 
 async def on_auto_reply_sent(
@@ -226,35 +376,18 @@ async def on_auto_reply_sent(
     if not _cfg.get("enabled", True):
         return
 
-    review_id = _next_review_id()
-    flags = run_heuristics(user_message, bot_response, last_assistant)
-    judge = await judge_response(user_message, bot_response)
-
-    review = {
-        "id": review_id,
-        "chat_id": chat_id,
-        "vip_user_id": vip_user_id,
-        "vip_username": username,
-        "user_message": user_message,
-        "bot_response": bot_response,
-        "heuristic_flags": flags,
-        "judge_score": judge.get("score", 3),
-        "judge_generic": judge.get("generic", False),
-        "judge_reason": judge.get("reason", ""),
-        "status": "pending",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    pending_reviews[review_id] = review
-    _save_pending()
+    review = await _create_review(
+        chat_id, vip_user_id, username, user_message, bot_response, last_assistant,
+    )
 
     last_auto[chat_id] = {
         "response": bot_response,
         "user_message": user_message,
-        "review_id": review_id,
+        "review_id": review["id"],
         "timestamp": datetime.now(timezone.utc),
     }
 
-    if _should_notify(judge):
+    if _should_notify(review):
         await notify_reviewer(bot, review)
 
 
@@ -278,16 +411,54 @@ async def flush_notify_queue(bot) -> None:
         await _send_review_message(bot, get_reviewer_id(), review)
 
 
+def _save_validated(review: dict) -> None:
+    num = review["id"].replace("rev-", "")
+    _append_training({
+        "id": f"t-{num}",
+        "review_id": review["id"],
+        "chat_id": review["chat_id"],
+        "vip_username": review["vip_username"],
+        "user_message": review["user_message"],
+        "bad_response": review["bot_response"],
+        "good_response": review["bot_response"],
+        "source": "validated",
+        "judge_score": review["judge_score"],
+        "heuristic_flags": review["heuristic_flags"],
+        "tags": [],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+async def _deliver_from_review(
+    bot, review: dict, text: str, context: ContextTypes.DEFAULT_TYPE,
+) -> bool:
+    dispatch = pending_dispatch.pop(review["id"], None)
+    pending_dispatch_by_chat.pop(review["chat_id"], None)
+    if not dispatch:
+        return False
+    deliver: Callable = _cfg["deliver_vip"]
+    return await deliver(
+        bot,
+        chat_id=dispatch["chat_id"],
+        bc_id=dispatch["bc_id"],
+        username=dispatch["username"],
+        gen=dispatch["gen"],
+        text=text,
+    )
+
+
 async def _send_review_message(bot, chat_id: int, review: dict) -> None:
     num = review["id"].replace("rev-", "")
     flags = ", ".join(review["heuristic_flags"]) or "ninguna"
     generic = "sí" if review["judge_generic"] else "no"
+    pre = _cfg.get("pre_approval", False)
+    header = "Aprobación" if pre else "Revisión"
 
     text = (
-        f"Revisión #{num} — {review['vip_username']}\n"
+        f"{header} #{num} — {review['vip_username']}\n"
         f"{'─' * 25}\n"
         f"Él: {review['user_message'][:300]}\n\n"
-        f"Diana (auto): {review['bot_response'][:300]}\n\n"
+        f"{'Propuesta' if pre else 'Diana (auto)'}: {review['bot_response'][:300]}\n\n"
         f"Score: {review['judge_score']}/5 | genérica: {generic}\n"
         f"Flags: {flags}\n"
         f"{'─' * 25}"
@@ -295,13 +466,22 @@ async def _send_review_message(bot, chat_id: int, review: dict) -> None:
     if review.get("judge_reason"):
         text += f"\n{review['judge_reason'][:200]}"
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("Estuvo bien", callback_data=f"tr:ok:{num}"),
-            InlineKeyboardButton("Mejorar", callback_data=f"tr:fix:{num}"),
-            InlineKeyboardButton("Debió escalar", callback_data=f"tr:esc:{num}"),
-        ]
-    ])
+    if pre:
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Enviar", callback_data=f"tr:send:{num}"),
+                InlineKeyboardButton("Modificar", callback_data=f"tr:fix:{num}"),
+                InlineKeyboardButton("No enviar", callback_data=f"tr:esc:{num}"),
+            ]
+        ])
+    else:
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Estuvo bien", callback_data=f"tr:ok:{num}"),
+                InlineKeyboardButton("Mejorar", callback_data=f"tr:fix:{num}"),
+                InlineKeyboardButton("Debió escalar", callback_data=f"tr:esc:{num}"),
+            ]
+        ])
 
     try:
         await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard)
@@ -362,24 +542,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.answer("Revisión no encontrada", show_alert=True)
         return True
 
-    if action == "ok":
+    pre = _cfg.get("pre_approval", False)
+
+    if action in ("ok", "send"):
         review["status"] = "validated"
         _save_pending()
-        _append_training({
-            "id": f"t-{num}",
-            "review_id": review["id"],
-            "chat_id": review["chat_id"],
-            "vip_username": review["vip_username"],
-            "user_message": review["user_message"],
-            "bad_response": review["bot_response"],
-            "good_response": review["bot_response"],
-            "source": "validated",
-            "judge_score": review["judge_score"],
-            "heuristic_flags": review["heuristic_flags"],
-            "tags": [],
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-        await query.answer("Marcado como correcto")
+        _save_validated(review)
+        if pre and action == "send":
+            ok = await _deliver_from_review(
+                context.bot, review, review["bot_response"], context,
+            )
+            await query.answer("Enviado" if ok else "No enviado — chat actualizado")
+        else:
+            await query.answer("Marcado como correcto")
         await query.edit_message_reply_markup(reply_markup=None)
 
     elif action == "fix":
@@ -387,25 +562,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         _save_pending()
         pending_correction[reviewer_id] = review["id"]
         await query.answer()
-        await context.bot.send_message(
-            chat_id=reviewer_id,
-            text=f"Revisión #{num} — ¿qué habrías dicho?",
+        prompt = (
+            f"Aprobación #{num} — escribe la versión que quieres enviar:"
+            if pre else f"Revisión #{num} — ¿qué habrías dicho?"
         )
+        await context.bot.send_message(chat_id=reviewer_id, text=prompt)
 
     elif action == "esc":
         review["status"] = "escalated"
         _save_pending()
+        if pre:
+            cancel_dispatch_for_chat(review["chat_id"])
         log_escalation: Callable = _cfg["log_escalation"]
         log_escalation(
             review.get("vip_user_id", review["chat_id"]),
             review["vip_username"],
-            f"Retroactivo post-auto-reply: {review['judge_reason']}",
+            f"{'Pre-envío' if pre else 'Retroactivo'}: {review['judge_reason']}",
             [
                 {"role": "user", "content": review["user_message"]},
                 {"role": "assistant", "content": review["bot_response"]},
             ],
         )
-        await query.answer("Escalado")
+        await query.answer("No enviado — escalado" if pre else "Escalado")
         await query.edit_message_reply_markup(reply_markup=None)
 
     return True
@@ -432,15 +610,41 @@ async def handle_reviewer_message(
         pending_correction.pop(reviewer_id, None)
         return False
 
-    _save_correction(review, msg.text.strip(), "diana_feedback")
+    corrected = msg.text.strip()
+    _save_correction(review, corrected, "diana_feedback")
     review["status"] = "corrected"
     _save_pending()
     pending_correction.pop(reviewer_id, None)
 
     num = review_id.replace("rev-", "")
-    await msg.reply_text(f"Corrección #{num} guardada.")
+    if _cfg.get("pre_approval") and review_id in pending_dispatch:
+        ok = await _deliver_from_review(context.bot, review, corrected, context)
+        await msg.reply_text(
+            f"Corrección #{num} enviada." if ok
+            else f"Corrección #{num} guardada — no enviada (chat actualizado)."
+        )
+    else:
+        await msg.reply_text(f"Corrección #{num} guardada.")
     log.info(f"Corrección guardada: {review_id}")
     return True
+
+
+def on_diana_manual_reply(chat_id: int, manual_text: str) -> None:
+    """Cancela aprobación pendiente o registra corrección implícita post-envío."""
+    review_id = pending_dispatch_by_chat.get(chat_id)
+    if review_id and _cfg.get("pre_approval"):
+        review = pending_reviews.get(review_id)
+        pending_dispatch.pop(review_id, None)
+        pending_dispatch_by_chat.pop(chat_id, None)
+        if review:
+            manual = manual_text.strip()
+            if manual.lower() != review["bot_response"].lower().strip():
+                _save_correction(review, manual, "implicit_correction")
+            review["status"] = "implicit_corrected"
+            _save_pending()
+            log.info(f"Aprobación cancelada — Diana respondió manual: {review_id}")
+        return
+    on_implicit_correction(chat_id, manual_text)
 
 
 def on_implicit_correction(chat_id: int, manual_text: str) -> bool:
@@ -478,6 +682,7 @@ async def send_stats(bot, chat_id: int) -> None:
     corrected = sum(1 for e in entries if e.get("source") == "diana_feedback")
     implicit = sum(1 for e in entries if e.get("source") == "implicit_correction")
     escalated = sum(1 for r in pending_reviews.values() if r.get("status") == "escalated")
+    awaiting = sum(1 for r in pending_reviews.values() if r.get("status") == "awaiting_send")
     pending = sum(1 for r in pending_reviews.values() if r.get("status") == "pending")
     total_reviews = len(pending_reviews)
 
@@ -489,6 +694,7 @@ async def send_stats(bot, chat_id: int) -> None:
         f"Correcciones implícitas: {implicit}\n"
         f"Validados: {validated}\n"
         f"Escalados: {escalated}\n"
+        f"Por aprobar: {awaiting}\n"
         f"Pendientes: {pending}\n"
         f"Ejemplos en jsonl: {len(entries)}"
     )

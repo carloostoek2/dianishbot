@@ -7,15 +7,18 @@ Requiere python-telegram-bot >= 21.0
 
 import asyncio
 import aiohttp
+import json
 import logging
 import os
 import random
 from datetime import datetime
+from pathlib import Path
 
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, ContextTypes, TypeHandler
 
+import auth_users
 import training
 
 load_dotenv()
@@ -29,11 +32,13 @@ DEEPSEEK_KEY   = os.getenv("DEEPSEEK_KEY")
 DEEPSEEK_URL   = "https://api.deepseek.com/v1/chat/completions"
 DEEPSEEK_MODEL = "deepseek-v4-flash"
 
-# IDs de Telegram de los usuarios VIP
-VIP_USERS = {
+# Usuarios VIP iniciales (se migran a diana_authorized_users.json al primer arranque)
+VIP_USERS_SEED = {
     1280444712,
-    # agregar más aquí
 }
+AUTH_USERS_FILE = "diana_authorized_users.json"
+AUTH_USERS_MAX  = 10
+STATE_FILE      = "diana_state.json"
 
 RESPONSE_DELAY_MIN = 1   # minutos — inicio del rango de espera antes del flujo
 RESPONSE_DELAY_MAX = 8   # minutos — fin del rango (aleatorio entre min y max)
@@ -52,9 +57,10 @@ TRAINING_ENABLED          = True
 TRAINING_REVIEW_ALL       = True
 TRAINING_FILE             = "diana_training.jsonl"
 TRAINING_PENDING_FILE     = "diana_training_pending.json"
-TRAINING_REVIEWER_ID      = None
+TRAINING_REVIEWER_ID      = 6181290784   # Diana — DM privado con el bot (/start)
 IMPLICIT_CORRECTION_SECS  = 600
 TRAINING_INJECT_ENABLED   = False
+TRAINING_PRE_APPROVAL     = True    # True: Diana aprueba antes de enviar al VIP
 
 # ═══════════════════════════════════════════════════════
 #  PROMPT — pegar el contenido completo de prompt_diana_v1.1.md
@@ -299,6 +305,44 @@ reply_gen: dict[int, int] = {}
 # ID de Diana — se resuelve al activar business_connection
 diana_user_id: int | None = None
 
+
+def _load_connections_state() -> None:
+    path = Path(STATE_FILE)
+    if not path.exists():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for bc_id, owner_id in data.get("connections", {}).items():
+            connections[bc_id] = owner_id
+        if connections:
+            log.info(f"Conexiones restauradas: {len(connections)}")
+    except Exception as e:
+        log.error(f"Error cargando estado: {e}")
+
+
+def _save_connections_state() -> None:
+    Path(STATE_FILE).write_text(
+        json.dumps({"connections": connections}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _resolve_sender_id(msg) -> int | None:
+    if msg.from_user:
+        return msg.from_user.id
+    if msg.chat and msg.chat.type == "private":
+        return msg.chat.id
+    return None
+
+
+def _resolve_vip_id(msg) -> int | None:
+    sender_id = _resolve_sender_id(msg)
+    if sender_id and auth_users.is_authorized(sender_id, msg.chat.id):
+        return sender_id
+    if auth_users.is_authorized(None, msg.chat.id):
+        return msg.chat.id
+    return sender_id
+
 # ═══════════════════════════════════════════════════════
 #  PALABRAS QUE ACTIVAN ESCALACIÓN INMEDIATA
 # ═══════════════════════════════════════════════════════
@@ -334,16 +378,6 @@ async def get_diana_response(chat_id: int) -> str | None:
         )
         system_prompt += training.build_examples_block(last_user)
 
-    payload = {
-        "model": DEEPSEEK_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            *msgs[-MAX_HISTORY:],
-        ],
-        "max_tokens": 200,
-        "temperature": 0.85,
-    }
-
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_KEY}",
         "Content-Type": "application/json",
@@ -351,15 +385,34 @@ async def get_diana_response(chat_id: int) -> str | None:
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                DEEPSEEK_URL, json=payload, headers=headers,
-                timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
-                if resp.status != 200:
-                    log.error(f"DeepSeek {resp.status}: {await resp.text()}")
-                    return None
-                data = await resp.json()
-                return data["choices"][0]["message"]["content"].strip()
+            for attempt, max_tokens in enumerate((400, 600), start=1):
+                payload = {
+                    "model": DEEPSEEK_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        *msgs[-MAX_HISTORY:],
+                    ],
+                    "max_tokens": max_tokens,
+                    "temperature": 0.85,
+                }
+                async with session.post(
+                    DEEPSEEK_URL, json=payload, headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status != 200:
+                        log.error(f"DeepSeek {resp.status}: {await resp.text()}")
+                        return None
+                    data = await resp.json()
+                    content = (
+                        data["choices"][0]["message"].get("content") or ""
+                    ).strip()
+                    if content:
+                        return content
+                    log.warning(
+                        f"DeepSeek content vacío (intento {attempt}/{2}) "
+                        f"— reasoning consumió tokens"
+                    )
+        return None
     except Exception as e:
         log.error(f"DeepSeek error: {e}")
         return None
@@ -412,6 +465,55 @@ async def simulate_typing(bot, chat_id: int, bc_id: str, text: str):
         elapsed += chunk
 
 # ═══════════════════════════════════════════════════════
+#  ENTREGA AL VIP (cadena humana)
+# ═══════════════════════════════════════════════════════
+
+async def deliver_vip_response(
+    bot,
+    *,
+    chat_id: int,
+    bc_id: str,
+    username: str,
+    gen: int,
+    text: str,
+) -> bool:
+    """Leer → pausa → escribiendo → enviar. Retorna False si el turno quedó obsoleto."""
+    if reply_gen.get(chat_id) != gen:
+        log.info(f"Entrega cancelada (gen obsoleto) para {chat_id}")
+        return False
+
+    msg_id = pending_msg.get(chat_id)
+    if msg_id:
+        await asyncio.sleep(random.uniform(0.3, 1.0))
+        await mark_as_read(bot, bc_id, chat_id, msg_id)
+
+    if reply_gen.get(chat_id) != gen:
+        return False
+
+    await asyncio.sleep(random.uniform(1.5, 4.0))
+
+    if reply_gen.get(chat_id) != gen:
+        return False
+
+    await simulate_typing(bot, chat_id, bc_id, text)
+
+    if reply_gen.get(chat_id) != gen:
+        return False
+
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            business_connection_id=bc_id,
+        )
+        history[chat_id].append({"role": "assistant", "content": text})
+        log.info(f"Enviado a {username}: {text[:80]}...")
+        return True
+    except Exception as e:
+        log.error(f"Error enviando a {chat_id}: {e}")
+        return False
+
+# ═══════════════════════════════════════════════════════
 #  TIMER DE COBERTURA
 # ═══════════════════════════════════════════════════════
 
@@ -419,8 +521,9 @@ async def auto_reply(
     bot, chat_id: int, username: str, bc_id: str, gen: int, vip_user_id: int,
 ):
     """
-    Espera un delay aleatorio. Si Diana no respondió, ejecuta en cadena:
-    leer → pausa → LLM → escribiendo → enviar.
+    Espera delay aleatorio, genera respuesta LLM.
+    Pre-aprobación: envía propuesta a Diana antes del VIP.
+    Post-envío: cadena humana directa al VIP + revisión después.
     """
     delay_sec = random.uniform(RESPONSE_DELAY_MIN * 60, RESPONSE_DELAY_MAX * 60)
     log.info(f"⏳ {username}: respuesta programada en {delay_sec / 60:.1f} min")
@@ -435,19 +538,27 @@ async def auto_reply(
 
     log.info(f"Cobertura activada para {username} ({chat_id})")
 
-    msg_id = pending_msg.get(chat_id)
-    if msg_id:
-        await asyncio.sleep(random.uniform(0.3, 1.0))
-        await mark_as_read(bot, bc_id, chat_id, msg_id)
-
-    if reply_gen.get(chat_id) != gen:
-        return
-
-    await asyncio.sleep(random.uniform(1.5, 4.0))
+    if not (TRAINING_ENABLED and TRAINING_PRE_APPROVAL):
+        msg_id = pending_msg.get(chat_id)
+        if msg_id:
+            await asyncio.sleep(random.uniform(0.3, 1.0))
+            await mark_as_read(bot, bc_id, chat_id, msg_id)
+        if reply_gen.get(chat_id) != gen:
+            return
+        await asyncio.sleep(random.uniform(1.5, 4.0))
 
     response = await get_diana_response(chat_id)
     if not response:
-        log.warning(f"Sin respuesta LLM para {chat_id}")
+        log.warning(f"Sin respuesta LLM para {username} ({chat_id})")
+        if TRAINING_ENABLED and TRAINING_PRE_APPROVAL:
+            user_msg = next(
+                (m["content"] for m in reversed(history.get(chat_id, [])) if m["role"] == "user"),
+                "",
+            )
+            await training.notify_llm_failure(
+                bot, chat_id=chat_id, bc_id=bc_id, username=username,
+                gen=gen, vip_user_id=vip_user_id, user_message=user_msg,
+            )
         if timers.get(chat_id) is asyncio.current_task():
             timers.pop(chat_id, None)
         return
@@ -455,37 +566,125 @@ async def auto_reply(
     if reply_gen.get(chat_id) != gen:
         return
 
-    await simulate_typing(bot, chat_id, bc_id, response)
-
-    if reply_gen.get(chat_id) != gen:
-        return
+    user_msg = next(
+        (m["content"] for m in reversed(history[chat_id]) if m["role"] == "user"),
+        "",
+    )
+    last_asst = next(
+        (m["content"] for m in reversed(history[chat_id]) if m["role"] == "assistant"),
+        None,
+    )
 
     try:
-        await bot.send_message(
-            chat_id=chat_id,
-            text=response,
-            business_connection_id=bc_id,
-        )
-        history[chat_id].append({"role": "assistant", "content": response})
-        log.info(f"Enviado a {username}: {response[:80]}...")
-
-        user_msg = next(
-            (m["content"] for m in reversed(history[chat_id][:-1]) if m["role"] == "user"),
-            "",
-        )
-        last_asst = next(
-            (m["content"] for m in reversed(history[chat_id][:-1]) if m["role"] == "assistant"),
-            None,
-        )
-        await training.on_auto_reply_sent(
-            bot, chat_id, vip_user_id, username, user_msg, response, last_asst,
-        )
-
+        if TRAINING_ENABLED and TRAINING_PRE_APPROVAL:
+            await training.request_pre_approval(
+                bot,
+                chat_id=chat_id,
+                bc_id=bc_id,
+                username=username,
+                gen=gen,
+                vip_user_id=vip_user_id,
+                user_message=user_msg,
+                bot_response=response,
+                last_assistant=last_asst,
+            )
+            log.info(f"Propuesta enviada a Diana para aprobación ({chat_id})")
+        else:
+            ok = await deliver_vip_response(
+                bot, chat_id=chat_id, bc_id=bc_id,
+                username=username, gen=gen, text=response,
+            )
+            if ok and TRAINING_ENABLED:
+                await training.on_auto_reply_sent(
+                    bot, chat_id, vip_user_id, username,
+                    user_msg, response, last_asst,
+                )
     except Exception as e:
-        log.error(f"Error enviando a {chat_id}: {e}")
+        log.error(f"Error en flujo de respuesta {chat_id}: {e}")
     finally:
         if timers.get(chat_id) is asyncio.current_task():
             timers.pop(chat_id, None)
+
+# ═══════════════════════════════════════════════════════
+#  MENSAJES BUSINESS (VIP / Diana)
+# ═══════════════════════════════════════════════════════
+
+async def _handle_business_message(
+    msg,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    edited: bool = False,
+):
+    bc_id     = msg.business_connection_id
+    chat_id   = msg.chat.id
+    text      = msg.text or msg.caption or ""
+    sender_id = _resolve_sender_id(msg)
+    vip_id    = _resolve_vip_id(msg)
+    username  = (
+        (msg.from_user.username or msg.from_user.first_name)
+        if msg.from_user else str(chat_id)
+    )
+
+    owner_id = connections.get(bc_id)
+    if not owner_id and bc_id:
+        try:
+            conn = await context.bot.get_business_connection(bc_id)
+            if conn.is_enabled:
+                connections[bc_id] = conn.user.id
+                _save_connections_state()
+                owner_id = conn.user.id
+                log.info(f"Conexión resuelta via API: {bc_id}")
+        except Exception as e:
+            log.debug(f"get_business_connection({bc_id}): {e}")
+
+    if owner_id and sender_id == owner_id:
+        if edited:
+            return
+        log.info(f"Diana retomó con {chat_id}: {text[:60]}")
+        training.on_diana_manual_reply(chat_id, text)
+        history.setdefault(chat_id, []).append({"role": "assistant", "content": text})
+        if chat_id in timers:
+            timers.pop(chat_id).cancel()
+            log.info(f"Timer cancelado para {chat_id}")
+        return
+
+    if not vip_id or not auth_users.is_authorized(vip_id, chat_id):
+        log.info(
+            f"Mensaje ignorado — no autorizado | sender:{sender_id} "
+            f"chat:{chat_id} vip:{vip_id} edited:{edited}"
+        )
+        return
+
+    if edited:
+        log.info(f"Edición ignorada de {username} ({vip_id})")
+        return
+
+    log.info(f"ENTRADA {username}: {text[:100]}")
+
+    training.cancel_dispatch_for_chat(chat_id)
+
+    history.setdefault(chat_id, []).append({"role": "user", "content": text})
+    chat_bc[chat_id] = bc_id
+    pending_msg[chat_id] = msg.message_id
+    pending_vip_user[chat_id] = vip_id
+
+    reason = needs_escalation(text)
+    if reason:
+        log_escalation(vip_id, username, reason, history[chat_id])
+        log.info(f"ESCALADO {username} — {reason}")
+        if chat_id in timers:
+            timers.pop(chat_id).cancel()
+        return
+
+    if chat_id in timers:
+        timers.pop(chat_id).cancel()
+
+    reply_gen[chat_id] = reply_gen.get(chat_id, 0) + 1
+    gen = reply_gen[chat_id]
+    task = asyncio.create_task(
+        auto_reply(context.bot, chat_id, username, bc_id, gen, vip_id)
+    )
+    timers[chat_id] = task
 
 # ═══════════════════════════════════════════════════════
 #  PROCESADOR CENTRAL DE UPDATES
@@ -495,6 +694,8 @@ async def process_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Router principal — despacha según tipo de update."""
 
     if update.callback_query:
+        if await auth_users.handle_callback(update, context):
+            return
         if await training.handle_callback(update, context):
             return
 
@@ -504,8 +705,18 @@ async def process_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if update.message.text == "/entrenar":
                 await training.send_stats(context.bot, update.message.chat_id)
                 return
+            if await auth_users.handle_admin_message(update, context):
+                return
             if await training.handle_reviewer_message(update, context):
                 return
+        elif update.message.from_user:
+            sender = update.message.from_user.id
+            text = update.message.text or update.message.caption or ""
+            log.info(
+                f"Mensaje directo al bot ignorado | user:{sender} "
+                f"auth:{auth_users.is_authorized(sender)} text:{text[:60]}"
+            )
+            return
 
     # ── Conexión activada / desactivada por Diana ────
     if update.business_connection:
@@ -515,71 +726,35 @@ async def process_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
             connections[conn.id] = conn.user.id
             diana_user_id = conn.user.id
             training.set_reviewer_id(conn.user.id)
+            auth_users.set_admin_id(conn.user.id)
+            _save_connections_state()
             await training.flush_notify_queue(context.bot)
             log.info(f"Conexión activa: {conn.id} | Diana ID: {conn.user.id}")
         else:
             connections.pop(conn.id, None)
+            _save_connections_state()
             log.info(f"Conexión desactivada: {conn.id}")
         return
 
-    # ── Mensaje via business connection ─────────────
-    msg = update.business_message
-    if not msg:
+    if update.business_message:
+        await _handle_business_message(update.business_message, context)
         return
 
-    bc_id     = msg.business_connection_id
-    sender_id = msg.from_user.id
-    chat_id   = msg.chat.id
-    text      = msg.text or msg.caption or ""
-
-    # Obtener ID de Diana desde la conexión registrada
-    owner_id = connections.get(bc_id)
-
-    # ── Diana respondió manualmente ─────────────────
-    if owner_id and sender_id == owner_id:
-        log.info(f"Diana retomó con {chat_id}: {text[:60]}")
-        training.on_implicit_correction(chat_id, text)
-        history.setdefault(chat_id, []).append({"role": "assistant", "content": text})
-        if chat_id in timers:
-            timers.pop(chat_id).cancel()
-            log.info(f"Timer cancelado para {chat_id}")
+    if update.edited_business_message:
+        await _handle_business_message(
+            update.edited_business_message, context, edited=True,
+        )
         return
-
-    # ── Filtrar solo VIPs ────────────────────────────
-    if sender_id not in VIP_USERS:
-        return
-
-    username = msg.from_user.username or msg.from_user.first_name or str(sender_id)
-    log.info(f"ENTRADA {username}: {text[:100]}")
-
-    history.setdefault(chat_id, []).append({"role": "user", "content": text})
-    chat_bc[chat_id] = bc_id
-    pending_msg[chat_id] = msg.message_id
-    pending_vip_user[chat_id] = sender_id
-
-    # ── Escalación inmediata ─────────────────────────
-    reason = needs_escalation(text)
-    if reason:
-        log_escalation(sender_id, username, reason, history[chat_id])
-        log.info(f"ESCALADO {username} — {reason}")
-        if chat_id in timers:
-            timers.pop(chat_id).cancel()
-        return
-
-    # ── Reiniciar timer de silencio ──────────────────
-    if chat_id in timers:
-        timers.pop(chat_id).cancel()
-
-    reply_gen[chat_id] = reply_gen.get(chat_id, 0) + 1
-    gen = reply_gen[chat_id]
-    task = asyncio.create_task(
-        auto_reply(context.bot, chat_id, username, bc_id, gen, sender_id)
-    )
-    timers[chat_id] = task
 
 # ═══════════════════════════════════════════════════════
 #  MAIN
 # ═══════════════════════════════════════════════════════
+
+async def _post_init(app: Application) -> None:
+    _load_connections_state()
+    if training.get_reviewer_id():
+        await training.flush_notify_queue(app.bot)
+
 
 def main():
     missing = [name for name, val in (
@@ -593,6 +768,7 @@ def main():
         )
 
     log.info("Diana Business Bot v2.0 iniciando...")
+    _load_connections_state()
 
     training.configure(
         enabled=TRAINING_ENABLED,
@@ -605,11 +781,24 @@ def main():
         deepseek_url=DEEPSEEK_URL,
         deepseek_model=DEEPSEEK_MODEL,
         log_escalation=log_escalation,
+        pre_approval=TRAINING_PRE_APPROVAL,
+        deliver_vip=deliver_vip_response,
+    )
+    if TRAINING_REVIEWER_ID:
+        training.set_reviewer_id(TRAINING_REVIEWER_ID)
+        auth_users.set_admin_id(TRAINING_REVIEWER_ID)
+
+    auth_users.configure(
+        users_file=AUTH_USERS_FILE,
+        max_users=AUTH_USERS_MAX,
+        seed_user_ids=VIP_USERS_SEED,
+        admin_id=TRAINING_REVIEWER_ID,
     )
 
     app = (
         Application.builder()
         .token(BOT_TOKEN)
+        .post_init(_post_init)
         .connect_timeout(TG_CONNECT_TIMEOUT)
         .read_timeout(TG_READ_TIMEOUT)
         .write_timeout(TG_WRITE_TIMEOUT)
@@ -625,9 +814,9 @@ def main():
     app.add_handler(TypeHandler(Update, process_update))
 
     log.info(
-        f"VIPs monitoreados: {len(VIP_USERS)} | "
+        f"VIPs autorizados: {len(auth_users.get_authorized_ids())} | "
         f"Delay respuesta: {RESPONSE_DELAY_MIN}–{RESPONSE_DELAY_MAX} min | "
-        f"Entrenamiento: {'ON (todos)' if TRAINING_REVIEW_ALL else 'ON (filtrado)'}"
+        f"Entrenamiento: {'pre-aprobación' if TRAINING_PRE_APPROVAL else 'post-envío'}"
     )
 
     app.run_polling(
