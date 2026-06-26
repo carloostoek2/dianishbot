@@ -64,6 +64,10 @@ OBSERVE_UNAUTHORIZED = True          # escuchar chats no autorizados (sin auto-r
 DB_FILE = "diana_training.db"
 MAX_FEW_SHOTS = 3
 
+# Temas excluidos solo de ejemplos observados (chats no autorizados).
+# FAQs transaccionales/informativas — no aportan al estilo personal de Diana.
+SKIP_OBSERVED_TOPICS = {"contenido", "precio", "acceso", "horarios", "presentacion"}
+
 # ══ CLASIFICADOR DE TEMA (para few-shots antes del LLM) ══
 TOPIC_MAP = {
     "precio": ["precio", "costo", "cuánto", "cuanto", "pago", "cobro", "suscripción"],
@@ -129,6 +133,9 @@ def save_observed_example(
     if not last_user.strip() or not diana_response.strip():
         return None
     topic = guess_topic(last_user)
+    if topic in SKIP_OBSERVED_TOPICS:
+        log.info(f"Ejemplo observado omitido — tema '{topic}' excluido del entrenamiento")
+        return None
     cur = db.execute(
         """INSERT INTO examples
            (chat_id, username, ts, context, bot_response, confidence, topic, rating, status)
