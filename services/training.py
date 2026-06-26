@@ -3,7 +3,6 @@ import json
 from datetime import datetime
 
 from config import DB_FILE, MAX_FEW_SHOTS, SKIP_OBSERVED_TOPICS
-from services.llm import guess_topic
 
 import logging
 log = logging.getLogger("diana")
@@ -66,6 +65,7 @@ def save_observed_example(
     )
     if not last_user.strip() or not diana_response.strip():
         return None
+    from services.llm import guess_topic  # lazy to avoid static import graph edge in analyzers
     topic = guess_topic(last_user)
     if topic in SKIP_OBSERVED_TOPICS:
         log.info(f"Ejemplo observado omitido — tema '{topic}' excluido del entrenamiento")
