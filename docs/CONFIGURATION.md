@@ -7,6 +7,10 @@
 |----------|----------|---------|-------------|
 | `BOT_TOKEN` | **Yes** | — | Telegram bot token from [@BotFather](https://t.me/BotFather). Loaded via `python-dotenv` at startup. Startup fails if missing. |
 | `DEEPSEEK_KEY` | **Yes** | — | DeepSeek API bearer token for LLM calls. Startup fails if missing. |
+| `API_ID` | No | — | Telegram API ID for `extractor.py` only. Get from [my.telegram.org](https://my.telegram.org). |
+| `API_HASH` | No | — | Telegram API hash for `extractor.py` only. |
+| `TELEGRAM_API_ID` | No | — | Alias for `API_ID` accepted by `extractor.py`. |
+| `TELEGRAM_API_HASH` | No | — | Alias for `API_HASH` accepted by `extractor.py`. |
 
 Create `.env` from the template:
 
@@ -14,24 +18,27 @@ Create `.env` from the template:
 cp .env.example .env
 ```
 
-The template in `.env.example` documents both variables with placeholder values.
+The template in `.env.example` documents `BOT_TOKEN`, `DEEPSEEK_KEY`, `API_ID`, and `API_HASH` with placeholder values.
 
 ## Config file format
 
-Beyond environment variables, runtime behavior is controlled by **hardcoded constants** in `diana.py` (lines 30–65). There is no external config file — edit the source to change these values.
+Beyond environment variables, runtime behavior is controlled by **constants in `config.py`**. There is no external config file — edit `config.py` to change these values.
 
-### Core settings
+### API and model
 
 | Constant | Value | Description |
 |----------|-------|-------------|
 | `DEEPSEEK_URL` | `https://api.deepseek.com/v1/chat/completions` | DeepSeek API endpoint |
-| `DEEPSEEK_MODEL` | `deepseek-v4-flash` | Model identifier sent in API requests |
+| `DEEPSEEK_MODEL` | `deepseek-v4-pro` | Model identifier sent in API requests |
+
+### Auth and state files
+
+| Constant | Value | Description |
+|----------|-------|-------------|
 | `AUTH_USERS_FILE` | `diana_authorized_users.json` | VIP allowlist persistence path |
 | `AUTH_USERS_MAX` | `10` | Maximum authorized VIP users |
 | `STATE_FILE` | `diana_state.json` | Business connection state file |
-| `DB_FILE` | `diana_training.db` | SQLite training database path |
-| `LOG_FILE` | `diana_business.log` | Application log file |
-| `ESCALATE_FILE` | `diana_escalaciones.txt` | Escalation audit log |
+| `VIP_USERS_SEED` | Set of user IDs | Seeded into allowlist on first run if JSON file is missing |
 
 ### Timing and behavior
 
@@ -42,9 +49,10 @@ Beyond environment variables, runtime behavior is controlled by **hardcoded cons
 | `SILENCE_MINUTES` | `2` | Wait time in supervised (`APPROVAL_MODE`) mode |
 | `MAX_HISTORY` | `10` | Messages sent to LLM as conversation context |
 | `MAX_FEW_SHOTS` | `3` | Approved examples injected into system prompt |
-| `CONFIDENCE_THRESHOLD` | `70` | Responses below this % trigger admin notification |
+| `CONFIDENCE_THRESHOLD` | `70` | Responses below this % trigger admin notification (autonomous mode) |
 | `APPROVAL_MODE` | `True` | `True` = supervised (Diana approves drafts); `False` = autonomous |
 | `OBSERVE_UNAUTHORIZED` | `True` | Log and learn from non-authorized chats without auto-replying |
+| `SKIP_OBSERVED_TOPICS` | `{"contenido", "precio", "acceso", "horarios", "presentacion"}` | Topics excluded from observed (unauthorized) training examples |
 
 ### Telegram network timeouts
 
@@ -56,17 +64,23 @@ Beyond environment variables, runtime behavior is controlled by **hardcoded cons
 | `TG_POOL_TIMEOUT` | `5.0` |
 | `TG_POLL_TIMEOUT` | `30` |
 
-### Admin and seed data
+### Admin and logging
 
 | Constant | Description |
 |----------|-------------|
 | `ADMIN_USER_ID` | Diana's Telegram user ID for admin DM commands |
 | `DIANA_ADMIN_CHAT_ID` | Same as admin ID — receives approval drafts and training notifications |
-| `VIP_USERS_SEED` | Set of user IDs seeded into allowlist on first run if JSON file is missing |
+| `LOG_FILE` | `diana_business.log` |
+| `ESCALATE_FILE` | `diana_escalaciones.txt` |
+| `DB_FILE` | `diana_training.db` |
+
+### Topic classification
+
+`TOPIC_MAP` in `config.py` maps topic labels to keyword lists used by `guess_topic()` in `services/llm.py` for few-shot selection. `ESCALATE_KEYWORDS` triggers immediate escalation without auto-reply.
 
 ## Required vs optional settings
 
-**Startup will fail** if either environment variable is absent:
+**Startup will fail** if either required environment variable is absent:
 
 ```python
 # diana.py main() — raises SystemExit
@@ -76,7 +90,9 @@ missing = [name for name, val in (
 ) if not val]
 ```
 
-All other settings have defaults defined in `diana.py` or are created at runtime (SQLite DB, JSON state files).
+All other settings have defaults defined in `config.py` or are created at runtime (SQLite DB, JSON state files).
+
+`extractor.py` requires `API_ID` and `API_HASH` at runtime but not for the main bot.
 
 ## Runtime data files
 
@@ -85,16 +101,17 @@ These files are created automatically and listed in `.gitignore`:
 | File | Created by | Purpose |
 |------|------------|---------|
 | `diana_authorized_users.json` | `auth_users._save()` | VIP allowlist |
-| `diana_state.json` | `_save_connections_state()` | Active business connection IDs |
-| `diana_training.db` | `init_db()` | Training examples table |
-| `diana_business.log` | `logging` | Application logs |
-| `diana_escalaciones.txt` | `log_escalation()` | Escalation audit trail |
+| `diana_state.json` | `state._save_connections_state()` | Active business connection IDs |
+| `diana_training.db` | `services/training.init_db()` + `MemoryService` | Training examples and user memory |
+| `diana_business.log` | `logging` in `diana.py` | Application logs |
+| `diana_escalaciones.txt` | `handlers/business.log_escalation()` | Escalation audit trail |
+| `diana_session.session` | `extractor.py` (Telethon) | User-session for chat export |
 
 ## Per-environment overrides
 
 The project does not use `.env.development` / `.env.production` split files. Configuration differences between environments are handled by:
 
 1. Different `.env` files on each deployment host (not committed).
-2. Editing hardcoded constants in `diana.py` for mode changes (`APPROVAL_MODE`, delays, thresholds).
+2. Editing constants in `config.py` for mode changes (`APPROVAL_MODE`, delays, thresholds).
 
 <!-- VERIFY: Production deployment host paths and process manager (systemd, screen, etc.) are not defined in the repository. -->

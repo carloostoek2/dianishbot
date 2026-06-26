@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # Diana Business Bot
 
-Telegram Business Chat Automation bot that covers VIP conversations on Diana's account using DeepSeek LLM responses, human-like delivery timing, and a supervised training loop.
+Telegram Business Chat Automation bot that covers VIP conversations on Diana's account using DeepSeek LLM responses, human-like delivery timing, supervised training, and per-user memory.
 
 ## Installation
 
@@ -13,6 +13,12 @@ source venv/bin/activate
 pip install "python-telegram-bot>=21.0" python-dotenv aiohttp
 cp .env.example .env
 # Edit .env with your BOT_TOKEN and DEEPSEEK_KEY
+```
+
+For the optional chat-history extractor, also install Telethon:
+
+```bash
+pip install telethon
 ```
 
 ## Quick start
@@ -47,17 +53,18 @@ Forward a user's message to the bot to add them; use inline buttons to remove us
 
 **Approve or correct draft responses (supervised mode):**
 
-When `APPROVAL_MODE` is enabled in `diana.py`, Diana receives draft previews in her admin DM with **Enviar tal cual** / **Corregir antes** buttons before messages reach VIPs.
+When `APPROVAL_MODE` is enabled in `config.py`, Diana receives draft previews in her admin DM with **Enviar tal cual** / **Corregir antes** buttons before messages reach VIPs.
 
 **Extract full chat histories for training (bootstrap):**
 
 ```bash
-# 1. Add your API_ID / API_HASH to .env (from https://my.telegram.org)
-# 2. List chats
+# 1. Add API_ID / API_HASH to .env (from https://my.telegram.org)
+# 2. pip install telethon
+# 3. List chats
 python extractor.py list
 
-# 3. Export a specific chat as ready-to-import training data
-python extractor.py export -c 123456789 -f training --import-db
+# 4. Export a specific chat as ready-to-import training data
+python extractor.py export --chat 123456789 --format training --import-db
 
 # Formats:
 #   raw      → full JSON with every message
@@ -67,14 +74,17 @@ python extractor.py export -c 123456789 -f training --import-db
 
 ## Project layout
 
-| File | Purpose |
+| Path | Purpose |
 |------|---------|
-| `diana.py` | Main bot — routing, LLM, timers, delivery, training |
+| `diana.py` | Entry point — wiring, logging, `Application` setup |
+| `config.py` | Environment variables, constants, system prompt |
+| `state.py` | In-memory runtime state (history, timers, connections) |
 | `auth_users.py` | VIP allowlist and `/usuarios` admin commands |
-| `extractor.py` | Standalone Telethon tool: export full chat histories → training examples |
-| `.env` | `BOT_TOKEN` and `DEEPSEEK_KEY` secrets (+ API_ID / API_HASH for extractor) |
-| `diana_training.db` | SQLite store for few-shot training examples |
-| `diana_authorized_users.json` | Persisted VIP allowlist |
+| `handlers/` | Telegram update routing, business messages, timers, callbacks |
+| `services/` | LLM calls, delivery, training DB, user memory |
+| `extractor.py` | Standalone Telethon tool for exporting chat histories |
+| `.env` | `BOT_TOKEN`, `DEEPSEEK_KEY`, and optional `API_ID` / `API_HASH` |
+| `diana_training.db` | SQLite store for few-shot training examples and user memory |
 
 ## Documentation
 

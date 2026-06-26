@@ -40,17 +40,18 @@ ptw
 
 When introducing tests, follow these conventions:
 
-**File naming:** `tests/test_<module>.py` — e.g., `tests/test_auth_users.py`, `tests/test_diana_escalation.py`
+**File naming:** `tests/test_<module>.py` — e.g., `tests/test_auth_users.py`, `tests/test_llm.py`
 
 **Suggested first targets** (pure functions, no Telegram network):
 
 | Function | Module | Why testable |
 |----------|--------|--------------|
-| `guess_topic()` | `diana.py` | Keyword classification, no I/O |
-| `needs_escalation()` | `diana.py` | Escalation keyword detection |
-| `build_few_shot_block()` | `diana.py` | Few-shot formatting from dict input |
+| `guess_topic()` | `services/llm.py` | Keyword classification, no I/O |
+| `needs_escalation()` | `handlers/business.py` | Escalation keyword detection |
+| `build_few_shot_block()` | `services/training.py` | Few-shot formatting from dict input |
 | `is_authorized()` | `auth_users.py` | Allowlist logic with temp JSON file |
 | `add_user()` / `remove_user()` | `auth_users.py` | CRUD with file persistence |
+| `_parse_confidence()` | `services/llm.py` | Confidence value parsing |
 
 **Async handlers** (`process_update`, `_handle_business_message`, `auto_reply`) require mocking `python-telegram-bot` `Update` and `ContextTypes` objects. Use `pytest-asyncio` with `@pytest.mark.asyncio`.
 
@@ -85,3 +86,4 @@ Manual verification checklist before merging changes:
 3. Authorized VIP messages trigger timer → LLM → delivery (or approval flow).
 4. Escalation keywords skip auto-reply and log to `diana_escalaciones.txt`.
 5. Callback buttons (approve, fix, rate, delete user) respond correctly.
+6. User memory facts are extracted after successful delivery (check `user_memory` table).

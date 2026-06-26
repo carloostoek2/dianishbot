@@ -5,7 +5,7 @@
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Python | >= 3.14 | Project uses CPython 3.14.4 locally |
+| Python | >= 3.14 | Project uses CPython 3.14 locally |
 | pip | Latest | For installing dependencies into a venv |
 | Telegram account | — | Diana's account with **Chat Automation** enabled |
 | Telegram bot | — | Created via [@BotFather](https://t.me/BotFather) |
@@ -16,6 +16,7 @@
 - `python-telegram-bot` >= 21.0 (tested with 22.8)
 - `python-dotenv`
 - `aiohttp`
+- `telethon` (optional — only for `extractor.py`)
 
 There is no `requirements.txt` or `pyproject.toml` in the repository — install packages manually or generate a lockfile locally.
 
@@ -79,7 +80,7 @@ Expected startup log output includes:
 
 The bot runs long-polling and listens for: `business_connection`, `business_message`, `edited_business_message`, `message`, and `callback_query` updates.
 
-**Seed VIP users:** On first run, IDs in `VIP_USERS_SEED` (defined in `diana.py`) are written to `diana_authorized_users.json` if the file does not exist.
+**Seed VIP users:** On first run, IDs in `VIP_USERS_SEED` (defined in `config.py`) are written to `diana_authorized_users.json` if the file does not exist.
 
 **Add more VIPs:** As admin, DM the bot `/usuarios` and forward a user's message to add them to the allowlist.
 
@@ -103,7 +104,7 @@ Faltan variables de entorno: BOT_TOKEN, DEEPSEEK_KEY. Copia .env.example a .env 
 
 **Symptoms:** Intermittent disconnects or timeout errors in logs.
 
-**Fix:** The bot configures extended timeouts (`TG_CONNECT_TIMEOUT=15`, `TG_READ_TIMEOUT=30`) in `diana.py`. Ensure stable network connectivity. The bot uses `bootstrap_retries=-1` for automatic reconnection.
+**Fix:** The bot configures extended timeouts (`TG_CONNECT_TIMEOUT=15`, `TG_READ_TIMEOUT=30`) in `config.py` and applies them in `diana.py` via `Application.builder()`. Ensure stable network connectivity. The bot uses `bootstrap_retries=-1` for automatic reconnection.
 
 ### User cannot be added via forward
 
