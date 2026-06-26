@@ -49,13 +49,30 @@ Forward a user's message to the bot to add them; use inline buttons to remove us
 
 When `APPROVAL_MODE` is enabled in `diana.py`, Diana receives draft previews in her admin DM with **Enviar tal cual** / **Corregir antes** buttons before messages reach VIPs.
 
+**Extract full chat histories for training (bootstrap):**
+
+```bash
+# 1. Add your API_ID / API_HASH to .env (from https://my.telegram.org)
+# 2. List chats
+python extractor.py list
+
+# 3. Export a specific chat as ready-to-import training data
+python extractor.py export -c 123456789 -f training --import-db
+
+# Formats:
+#   raw      → full JSON with every message
+#   training → context + diana response (same shape as diana_training.db)
+#   pairs    → simple user/diana turns
+```
+
 ## Project layout
 
 | File | Purpose |
 |------|---------|
 | `diana.py` | Main bot — routing, LLM, timers, delivery, training |
 | `auth_users.py` | VIP allowlist and `/usuarios` admin commands |
-| `.env` | `BOT_TOKEN` and `DEEPSEEK_KEY` secrets |
+| `extractor.py` | Standalone Telethon tool: export full chat histories → training examples |
+| `.env` | `BOT_TOKEN` and `DEEPSEEK_KEY` secrets (+ API_ID / API_HASH for extractor) |
 | `diana_training.db` | SQLite store for few-shot training examples |
 | `diana_authorized_users.json` | Persisted VIP allowlist |
 

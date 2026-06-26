@@ -5,3 +5,9 @@ diana_authorized_users.json
 diana_state.json
 diana_training.db
 .planning/tmp/
+
+# Telethon sessions & extractor outputs
+*.session
+exports/
+diana_session.session
+__pycache*
