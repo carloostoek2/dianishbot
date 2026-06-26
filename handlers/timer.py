@@ -34,9 +34,11 @@ async def auto_reply(
 
     log.info(f"Cobertura activada para {username} ({chat_id})")
 
-    response, confidence, topic = await get_diana_response(chat_id)
+    response, confidence, topic = await get_diana_response(
+        chat_id,
+        should_abort=lambda: reply_gen.get(chat_id) != gen,
+    )
     if not response:
-        log.warning(f"Sin respuesta LLM para {chat_id}")
         if timers.get(chat_id) is asyncio.current_task():
             timers.pop(chat_id, None)
         return

@@ -23,6 +23,8 @@ STATE_FILE      = "diana_state.json"
 RESPONSE_DELAY_MIN = 1   # minutos — inicio del rango de espera antes del flujo
 RESPONSE_DELAY_MAX = 8   # minutos — fin del rango (aleatorio entre min y max)
 MAX_HISTORY     = 10    # mensajes de contexto que se envían al LLM
+LLM_MAX_RETRIES = 3     # intentos totales ante fallo de red, JSON inválido o respuesta vacía
+LLM_RETRY_DELAY_SEC = 2.0  # pausa entre reintentos
 
 # Timeouts de red con Telegram (segundos) — defaults de PTB (5 s) causan ReadTimeout
 TG_CONNECT_TIMEOUT = 15.0

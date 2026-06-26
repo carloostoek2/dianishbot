@@ -1,12 +1,16 @@
+import asyncio
 import aiohttp
 import json
 import logging
+from collections.abc import Callable
 
 from config import (
     DEEPSEEK_KEY,
     DEEPSEEK_MODEL,
     DEEPSEEK_URL,
     DIANA_SYSTEM_PROMPT,
+    LLM_MAX_RETRIES,
+    LLM_RETRY_DELAY_SEC,
     MAX_HISTORY,
     TOPIC_MAP,
 )
@@ -65,8 +69,14 @@ async def raw_call(
         return None
 
 
-async def get_diana_response(chat_id: int) -> tuple[str | None, int, str]:
-    """Devuelve (texto_respuesta, confidence 0-100, topic)."""
+async def get_diana_response(
+    chat_id: int,
+    *,
+    max_retries: int | None = None,
+    retry_delay_sec: float | None = None,
+    should_abort: Callable[[], bool] | None = None,
+) -> tuple[str | None, int, str]:
+    """Devuelve (texto_respuesta, confidence 0-100, topic). Reintenta ante fallos transitorios."""
     from services.training import get_few_shots, build_few_shot_block
 
     msgs = history.get(chat_id, [])
@@ -108,21 +118,53 @@ REGLAS CRÍTICAS DE ESTILO (prioridad máxima):
         *msgs[-MAX_HISTORY:],
     ]
 
-    raw = await raw_call(
-        messages=messages,
-        max_tokens=300,
-        temperature=0.85,
-        response_format={"type": "json_object"},
-    )
-    if not raw:
-        return None, 0, "general"
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        log.warning(f"DeepSeek ignoró JSON mode: {raw[:80]}")
-        return None, 0, "general"
-    return (
-        parsed.get("response", "").strip(),
-        _parse_confidence(parsed.get("confidence", 100)),
-        parsed.get("topic", "general"),
-    )
+    attempts = max_retries if max_retries is not None else LLM_MAX_RETRIES
+    delay = retry_delay_sec if retry_delay_sec is not None else LLM_RETRY_DELAY_SEC
+
+    for attempt in range(1, attempts + 1):
+        if should_abort and should_abort():
+            log.info(f"Reintento LLM cancelado para {chat_id} (nuevo mensaje)")
+            return None, 0, topic_guess
+
+        raw = await raw_call(
+            messages=messages,
+            max_tokens=300,
+            temperature=0.85,
+            response_format={"type": "json_object"},
+        )
+        if not raw:
+            if attempt < attempts:
+                log.warning(
+                    f"Sin respuesta LLM para {chat_id} (intento {attempt}/{attempts}), reintentando..."
+                )
+                await asyncio.sleep(delay)
+            continue
+
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            log.warning(f"DeepSeek ignoró JSON mode: {raw[:80]}")
+            if attempt < attempts:
+                log.warning(
+                    f"JSON inválido para {chat_id} (intento {attempt}/{attempts}), reintentando..."
+                )
+                await asyncio.sleep(delay)
+            continue
+
+        response = parsed.get("response", "").strip()
+        if not response:
+            if attempt < attempts:
+                log.warning(
+                    f"Respuesta vacía para {chat_id} (intento {attempt}/{attempts}), reintentando..."
+                )
+                await asyncio.sleep(delay)
+            continue
+
+        return (
+            response,
+            _parse_confidence(parsed.get("confidence", 100)),
+            parsed.get("topic", topic_guess),
+        )
+
+    log.warning(f"Sin respuesta LLM para {chat_id} tras {attempts} intentos")
+    return None, 0, topic_guess
