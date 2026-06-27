@@ -3,6 +3,8 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from services.memory import MemoryService
+
 import state
 from handlers.callbacks import (
     handle_callback,
@@ -90,7 +92,7 @@ async def test_handle_diana_note_saves(make_mock_update, make_context, admin_use
         "user_id": VIP_CHAT_ID,
         "username": "testvip",
     }
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
     mock_svc.add_note.return_value = True
     update = make_mock_update(text="Es muy sensible", user=admin_user)
 
@@ -294,7 +296,7 @@ async def test_handle_diana_note_whitespace_keeps_state(
         "user_id": VIP_CHAT_ID,
         "username": "testvip",
     }
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
     mock_svc.add_note.return_value = False
     update = make_mock_update(text="   ", user=admin_user)
 
@@ -344,7 +346,7 @@ async def test_handle_diana_note_persist_error_keeps_state(
         "user_id": VIP_CHAT_ID,
         "username": "testvip",
     }
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
     mock_svc.add_note.side_effect = RuntimeError("db locked")
     update = make_mock_update(text="Nota válida", user=admin_user)
 

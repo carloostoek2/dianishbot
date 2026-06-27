@@ -3,6 +3,8 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from services.memory import MemoryService
+
 import state
 from handlers.router import process_update
 
@@ -47,7 +49,7 @@ async def test_note_handler_before_correction(
         chat=admin_chat,
     )
     ctx = make_context()
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
 
     with (
         patch("handlers.router.DIANA_ADMIN_CHAT_ID", ADMIN_CHAT_ID),

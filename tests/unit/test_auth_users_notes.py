@@ -3,6 +3,8 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from services.memory import MemoryService
+
 import auth_users
 
 
@@ -25,7 +27,7 @@ def admin_user(make_user):
 
 @pytest.mark.asyncio
 async def test_nota_command_saves(make_mock_update, make_context, admin_user):
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
     mock_svc.add_note.return_value = True
     update = make_mock_update(text="/nota 888001 Es muy sensible", user=admin_user)
 
@@ -49,7 +51,7 @@ async def test_nota_usage_error(make_mock_update, make_context, admin_user):
 
 @pytest.mark.asyncio
 async def test_notas_lists_profile(make_mock_update, make_context, admin_user):
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
     mock_svc.get_notes.return_value = [
         {"text": "Nota uno", "date": "2026-06-01T12:00:00"},
     ]
@@ -68,7 +70,7 @@ async def test_notas_lists_profile(make_mock_update, make_context, admin_user):
 
 @pytest.mark.asyncio
 async def test_borrar_notas(make_mock_update, make_context, admin_user):
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
     mock_svc.clear_notes.return_value = True
     update = make_mock_update(text=f"/borrar_notas {VIP_ID}", user=admin_user)
 
@@ -102,7 +104,7 @@ async def test_nota_memory_unavailable(make_mock_update, make_context, admin_use
 
 @pytest.mark.asyncio
 async def test_borrar_notas_empty(make_mock_update, make_context, admin_user):
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
     mock_svc.clear_notes.return_value = False
     update = make_mock_update(text=f"/borrar_notas {VIP_ID}", user=admin_user)
 
@@ -127,7 +129,7 @@ async def test_non_admin_ignored(make_mock_update, make_context, make_user):
 
 @pytest.mark.asyncio
 async def test_nota_empty_note_rejected(make_mock_update, make_context, admin_user):
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
     mock_svc.add_note.return_value = False
     update = make_mock_update(text="/nota 888001 \x00\x01", user=admin_user)
 
@@ -172,7 +174,7 @@ async def test_notas_usage_error(make_mock_update, make_context, admin_user):
 
 @pytest.mark.asyncio
 async def test_notas_empty_profile(make_mock_update, make_context, admin_user):
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
     mock_svc.get_notes.return_value = []
     mock_svc.get_facts.return_value = {}
     update = make_mock_update(text=f"/notas {VIP_ID}", user=admin_user)
@@ -186,7 +188,7 @@ async def test_notas_empty_profile(make_mock_update, make_context, admin_user):
 
 @pytest.mark.asyncio
 async def test_notas_malformed_note_skipped(make_mock_update, make_context, admin_user):
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
     mock_svc.get_notes.return_value = [{"date": "2026-01-01"}]
     mock_svc.get_facts.return_value = {"name": "Ana"}
     update = make_mock_update(text=f"/notas {VIP_ID}", user=admin_user)
@@ -202,7 +204,7 @@ async def test_notas_malformed_note_skipped(make_mock_update, make_context, admi
 
 @pytest.mark.asyncio
 async def test_notas_invalid_user_id(make_mock_update, make_context, admin_user):
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
     update = make_mock_update(text="/notas abc", user=admin_user)
 
     with patch("services.llm.memory_service", mock_svc):
@@ -215,7 +217,7 @@ async def test_notas_invalid_user_id(make_mock_update, make_context, admin_user)
 
 @pytest.mark.asyncio
 async def test_notas_non_string_date_coerced(make_mock_update, make_context, admin_user):
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
     mock_svc.get_notes.return_value = [{"text": "ok", "date": 20260101}]
     mock_svc.get_facts.return_value = {}
     update = make_mock_update(text=f"/notas {VIP_ID}", user=admin_user)
@@ -231,7 +233,7 @@ async def test_notas_non_string_date_coerced(make_mock_update, make_context, adm
 
 @pytest.mark.asyncio
 async def test_notas_non_string_note_text(make_mock_update, make_context, admin_user):
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
     mock_svc.get_notes.return_value = [{"text": 999, "date": "2026-01-01"}]
     mock_svc.get_facts.return_value = {}
     update = make_mock_update(text=f"/notas {VIP_ID}", user=admin_user)
@@ -268,7 +270,7 @@ async def test_borrar_notas_invalid_user_id(make_mock_update, make_context, admi
 async def test_nota_takes_precedence_over_forward(
     make_mock_update, make_context, admin_user,
 ):
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
     mock_svc.add_note.return_value = True
     update = make_mock_update(text="/nota 888001 texto", user=admin_user)
     update.message.forward_origin = MagicMock()
@@ -282,7 +284,7 @@ async def test_nota_takes_precedence_over_forward(
 
 @pytest.mark.asyncio
 async def test_nota_persist_error(make_mock_update, make_context, admin_user):
-    mock_svc = MagicMock()
+    mock_svc = MagicMock(spec=MemoryService)
     mock_svc.add_note.side_effect = RuntimeError("db locked")
     update = make_mock_update(text="/nota 888001 texto", user=admin_user)
 

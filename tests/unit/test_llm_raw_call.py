@@ -40,6 +40,10 @@ async def test_raw_call_deepseek_returns_content_on_200():
     assert content == '{"response": "hola"}'
     assert err is None
     session.post.assert_called_once()
+    assert session.post.call_args.args[0] == llm_mod.DEEPSEEK_URL
+    headers = session.post.call_args.kwargs["headers"]
+    assert headers["Authorization"].startswith("Bearer ")
+    assert headers["Content-Type"] == "application/json"
 
 
 @pytest.mark.asyncio
@@ -53,6 +57,10 @@ async def test_raw_call_deepseek_returns_none_on_http_error_status():
 
     assert content is None
     assert err == "error_http_api"
+    assert session.post.call_args.args[0] == llm_mod.DEEPSEEK_URL
+    headers = session.post.call_args.kwargs["headers"]
+    assert headers["Authorization"].startswith("Bearer ")
+    assert headers["Content-Type"] == "application/json"
 
 
 @pytest.mark.asyncio
@@ -68,6 +76,10 @@ async def test_raw_call_deepseek_returns_none_on_network_exception():
 
     assert content is None
     assert err == "error_red"
+    assert session.post.call_args.args[0] == llm_mod.DEEPSEEK_URL
+    headers = session.post.call_args.kwargs["headers"]
+    assert headers["Authorization"].startswith("Bearer ")
+    assert headers["Content-Type"] == "application/json"
 
 
 @pytest.mark.asyncio
@@ -97,6 +109,10 @@ async def test_raw_call_anthropic_returns_content_on_200():
     assert body["system"] == "Eres Diana"
     assert body["messages"] == [{"role": "user", "content": "hola"}]
     assert body["output_config"]["format"]["type"] == "json_schema"
+    assert session.post.call_args.args[0] == llm_mod.ANTHROPIC_URL
+    assert call_kwargs["headers"]["x-api-key"] is not None
+    assert call_kwargs["headers"]["anthropic-version"] == llm_mod.ANTHROPIC_VERSION
+    assert call_kwargs["headers"]["Content-Type"] == "application/json"
 
 
 @pytest.mark.asyncio
@@ -110,3 +126,8 @@ async def test_raw_call_anthropic_returns_none_on_http_error_status():
 
     assert content is None
     assert err == "error_http_api"
+    assert session.post.call_args.args[0] == llm_mod.ANTHROPIC_URL
+    headers = session.post.call_args.kwargs["headers"]
+    assert headers["x-api-key"] is not None
+    assert headers["anthropic-version"] == llm_mod.ANTHROPIC_VERSION
+    assert headers["Content-Type"] == "application/json"
