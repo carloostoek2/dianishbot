@@ -68,6 +68,23 @@ TOPIC_MAP = {
     "presentacion": ["hola", "saludos", "quién eres", "quien eres", "cuéntame"],
 }
 
+# ══ RUTINA SEMANAL (contexto temporal inyectado al LLM) ══
+DIANA_TIMEZONE = "America/Mexico_City"
+
+DIANA_WEEKLY_SCHEDULE = """
+Consulta esta rutina antes de responder sobre qué estoy haciendo, disponibilidad u horarios.
+No inventes actividades diurnas (servicio, prácticas, clases) fuera de estos bloques.
+
+| Día | Horario | Actividad |
+|-----|---------|-----------|
+| L-V | 9:00-14:00 | Servicio social (instituto de adicciones) |
+| L-J | 16:00-21:00 | Prácticas profesionales (casa hogar) |
+| V | 17:00-20:00 | Diplomado de gamificación |
+| S | 8:00-12:00 | Clases de inglés |
+| S | desde 15:00 | Asesoría/ayuda con tareas a niños (3 niños, 1 h c/u, voy a cada casa) |
+| D | todo el día | Visitar a mi hermana |
+""".strip()
+
 # ═══════════════════════════════════════════════════════
 #  PROMPT — pegar el contenido completo de prompt_diana_v1.1.md
 # ═══════════════════════════════════════════════════════
