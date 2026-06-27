@@ -10,6 +10,9 @@ log = logging.getLogger("diana")
 # ══ ESTADO DE CORRECCIÓN PENDIENTE ══════════════════════
 awaiting_correction: dict[int, int] = {}
 
+# Captura de nota manual mientras Diana escribe: {diana_telegram_id: {"user_id": int, "username": str}}
+awaiting_note: dict[int, dict] = {}
+
 # ═══════════════════════════════════════════════════════
 #  ESTADO EN MEMORIA
 # ═══════════════════════════════════════════════════════

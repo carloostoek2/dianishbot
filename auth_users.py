@@ -261,6 +261,101 @@ async def handle_admin_message(
         await msg.reply_text(format_llm_failure_report(days))
         return True
 
+    # /notas before /nota (space) — prefix collision guard
+    if msg.text and msg.text.startswith("/notas"):
+        parts = msg.text.split()
+        if len(parts) < 2:
+            await msg.reply_text("Uso: /notas <user_id>")
+            return True
+        try:
+            target_id = int(parts[1])
+        except ValueError:
+            await msg.reply_text("ID inválido.")
+            return True
+        from services import llm as llm_mod
+        svc = llm_mod.memory_service
+        if not svc:
+            await msg.reply_text("Memoria no disponible.")
+            return True
+        from services.memory import extract_note_display_date, extract_note_display_text
+
+        notes = svc.get_notes(target_id)
+        facts = {k: v for k, v in svc.get_facts(target_id).items() if k != "notes"}
+        display_notes = []
+        for n in notes:
+            text = extract_note_display_text(n, target_id)
+            if text:
+                date = extract_note_display_date(n, target_id)
+                display_notes.append((date, text))
+        if not display_notes and not facts:
+            await msg.reply_text(f"Sin datos para {target_id}.")
+            return True
+        lines = [f"Perfil — {target_id}", "─" * 28]
+        if display_notes:
+            lines.append("Notas de Diana:")
+            for date_str, text in display_notes:
+                lines.append(f"  [{date_str}] {text}")
+        if facts:
+            lines.append("Datos extraídos:")
+            for k, v in facts.items():
+                lines.append(f"  {k}: {v}")
+        await msg.reply_text("\n".join(lines))
+        return True
+
+    if msg.text and msg.text.startswith("/nota "):
+        parts = msg.text.split(maxsplit=2)
+        if len(parts) < 3:
+            await msg.reply_text(
+                "Uso: /nota <user_id> <texto>\n"
+                "Ejemplo: /nota 123456 Es muy sensible, no hacer bromas pesadas"
+            )
+            return True
+        try:
+            target_id = int(parts[1])
+        except ValueError:
+            await msg.reply_text("El user_id debe ser numérico.")
+            return True
+        from services import llm as llm_mod
+        if not llm_mod.memory_service:
+            await msg.reply_text("Memoria no disponible.")
+            return True
+        note_text = parts[2].strip()
+        try:
+            saved = llm_mod.memory_service.add_note(target_id, note_text)
+        except Exception as e:
+            log.error(f"Error guardando nota manual | usuario {target_id}: {e}")
+            await msg.reply_text("Error al guardar la nota. Intenta de nuevo.")
+            return True
+        if saved:
+            await msg.reply_text(f"✓ Nota guardada para {target_id}.")
+            log.info(
+                f"Nota manual guardada | usuario {target_id}: {note_text[:60]}"
+            )
+        else:
+            await msg.reply_text("La nota está vacía o no es válida.")
+        return True
+
+    if msg.text and msg.text.startswith("/borrar_notas"):
+        parts = msg.text.split()
+        if len(parts) < 2:
+            await msg.reply_text("Uso: /borrar_notas <user_id>")
+            return True
+        try:
+            target_id = int(parts[1])
+        except ValueError:
+            await msg.reply_text("ID inválido.")
+            return True
+        from services import llm as llm_mod
+        if not llm_mod.memory_service:
+            await msg.reply_text("Memoria no disponible.")
+            return True
+        ok = llm_mod.memory_service.clear_notes(target_id)
+        await msg.reply_text(
+            f"✓ Notas borradas para {target_id}." if ok
+            else f"No había notas para {target_id}."
+        )
+        return True
+
     if msg.forward_origin:
         origin = msg.forward_origin
         if origin.type == MessageOrigin.HIDDEN_USER:

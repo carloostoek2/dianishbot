@@ -6,7 +6,7 @@ from config import DIANA_ADMIN_CHAT_ID
 from state import _load_connections_state, _save_connections_state, connections
 import state
 from .business import _handle_business_message
-from .callbacks import handle_callback, handle_diana_correction
+from .callbacks import handle_callback, handle_diana_correction, handle_diana_note
 log = logging.getLogger("diana")
 
 
@@ -24,6 +24,8 @@ async def process_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
         and not update.business_message
         and update.message.chat.id == DIANA_ADMIN_CHAT_ID
     ):
+        if await handle_diana_note(update, context):
+            return
         if await handle_diana_correction(update, context):
             return
 

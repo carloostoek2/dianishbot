@@ -2,7 +2,7 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from config import DIANA_ADMIN_CHAT_ID
-from state import awaiting_correction, pending_approval
+from state import awaiting_correction, awaiting_note, pending_approval
 from services.delivery import deliver_vip_response
 from services.training import update_rating
 from services.memory import schedule_memory_extract
@@ -29,8 +29,9 @@ async def notify_diana_approval(
         f"Respuesta propuesta:\n{response}"
     )
     teclado = InlineKeyboardMarkup([[
-        InlineKeyboardButton("Enviar tal cual", callback_data=f"a:approve:{example_id}"),
-        InlineKeyboardButton("Corregir antes", callback_data=f"a:fix:{example_id}"),
+        InlineKeyboardButton("Enviar tal cual",  callback_data=f"a:approve:{example_id}"),
+        InlineKeyboardButton("Corregir antes",   callback_data=f"a:fix:{example_id}"),
+        InlineKeyboardButton("📝 Nota",          callback_data=f"a:note:{example_id}"),
     ]])
     try:
         await bot.send_message(
@@ -167,6 +168,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # ══ MODO APROBACIÓN (a:) ═══════════════════════════════════════
     if prefix == "a":
         if action == "approve":
+            awaiting_note.pop(cq.from_user.id, None)
             if ex_id not in pending_approval:
                 await cq.edit_message_text("Este borrador ya expiró o fue procesado.")
                 return True
@@ -200,11 +202,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 )
                 log.warning(f"Aprobación {ex_id} obsoleta — gen desactualizado")
 
+        elif action == "note":
+            if ex_id not in pending_approval:
+                await cq.edit_message_text("Este borrador ya expiró o fue procesado.")
+                return True
+            pending = pending_approval[ex_id]
+            awaiting_correction.pop(cq.from_user.id, None)
+            awaiting_note[cq.from_user.id] = {
+                "user_id": pending["chat_id"],
+                "username": pending["username"],
+            }
+            await cq.edit_message_text(
+                f"✏️ Escribe tu nota para {pending['username']}:\n\n"
+                f"Se guardará en su perfil y se usará en todas las respuestas futuras.\n"
+                f"Escribe /cancelar_nota para cancelar (el borrador sigue pendiente)."
+            )
+
         elif action == "fix":
             if ex_id not in pending_approval:
                 await cq.edit_message_text("Este borrador ya expiró o fue procesado.")
                 return True
             pending = pending_approval[ex_id]
+            awaiting_note.pop(cq.from_user.id, None)
             awaiting_correction[cq.from_user.id] = ex_id
             await cq.edit_message_text(
                 f"Escribe la respuesta corregida para {pending['username']}:\n\n"
@@ -214,14 +233,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # ══ MODO AUTÓNOMO — retroalimentación post-envío (t:) ══════════
     elif prefix == "t":
         if action == "good":
+            awaiting_note.pop(cq.from_user.id, None)
             update_rating(ex_id, "good")
             await cq.edit_message_text(f"Guardado como ejemplo positivo (ID {ex_id}).")
             log.info(f"Ejemplo {ex_id} → good")
         elif action == "bad":
+            awaiting_note.pop(cq.from_user.id, None)
             update_rating(ex_id, "bad")
             await cq.edit_message_text(f"Marcado como mala respuesta (ID {ex_id}).")
             log.info(f"Ejemplo {ex_id} → bad")
         elif action == "fix":
+            awaiting_note.pop(cq.from_user.id, None)
             awaiting_correction[cq.from_user.id] = ex_id
             await cq.edit_message_text(
                 f"Esperando tu corrección para el ejemplo {ex_id}.\n\n"
@@ -239,8 +261,12 @@ async def handle_diana_correction(update: Update, context: ContextTypes.DEFAULT_
     if msg.from_user.id not in awaiting_correction:
         return False
 
+    stripped = msg.text.strip()
+    if stripped.startswith("/"):
+        return False
+
     ex_id = awaiting_correction.pop(msg.from_user.id)
-    correction = msg.text.strip()
+    correction = stripped
     update_rating(ex_id, "corrected", correction)
 
     if ex_id in pending_approval:
@@ -276,4 +302,62 @@ async def handle_diana_correction(update: Update, context: ContextTypes.DEFAULT_
         )
         log.info(f"Corrección guardada (autónomo): ejemplo {ex_id} → '{correction[:60]}'")
 
+    return True
+
+
+async def handle_diana_note(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> bool:
+    """Captura la nota que Diana escribe tras pulsar el botón 📝 Nota."""
+    msg = update.message
+    if not msg or not msg.text:
+        return False
+    if msg.from_user.id not in awaiting_note:
+        return False
+
+    stripped = msg.text.strip()
+    if stripped.startswith("/"):
+        base_cmd = stripped.split()[0].split("@")[0]
+        if base_cmd == "/cancelar_nota":
+            note_ctx = awaiting_note.pop(msg.from_user.id)
+            await msg.reply_text(
+                f"Nota cancelada. El borrador para {note_ctx['username']} "
+                "sigue pendiente."
+            )
+            return True
+        return False
+
+    note_ctx = awaiting_note[msg.from_user.id]
+    if not llm_mod.memory_service:
+        await msg.reply_text("Memoria no disponible.")
+        return True
+
+    try:
+        saved = llm_mod.memory_service.add_note(
+            note_ctx["user_id"], stripped,
+        )
+    except Exception as e:
+        log.error(
+            f"Error guardando nota manual | usuario {note_ctx['user_id']}: {e}"
+        )
+        await msg.reply_text(
+            "Error al guardar la nota. Intenta de nuevo o /cancelar_nota."
+        )
+        return True
+
+    if not saved:
+        await msg.reply_text(
+            "La nota está vacía o no es válida. Escribe de nuevo o /cancelar_nota."
+        )
+        return True
+
+    awaiting_note.pop(msg.from_user.id)
+    await msg.reply_text(
+        f"✓ Nota guardada para {note_ctx['username']}.\n"
+        f"Se aplica a partir de la próxima respuesta."
+    )
+    log.info(
+        f"Nota manual guardada | usuario {note_ctx['user_id']} "
+        f"({note_ctx['username']}): {stripped[:60]}"
+    )
     return True
