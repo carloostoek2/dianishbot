@@ -16,7 +16,7 @@ python extractor.py list                  # List exportable chats
 python extractor.py export --chat <id> --format training --import-db
 ```
 
-No build step, linter, formatter, or CI pipeline. No tests exist yet. To add tests, use pytest + pytest-asyncio (the recommended stack per docs/TESTING.md). All validation is manual against a Telegram test bot.
+No build step, linter, formatter, or CI pipeline. Automated tests: `PYTHONPATH=. pytest tests/` (103 tests — see docs/TESTING.md). Manual validation still required against a Telegram test bot.
 
 ## Architecture
 
@@ -28,7 +28,7 @@ No build step, linter, formatter, or CI pipeline. No tests exist yet. To add tes
 diana.py              → Composition root — wiring, logging, Application setup, polling
 config.py             → All constants, env vars, DIANA_SYSTEM_PROMPT, escalation keywords
 state.py              → In-memory runtime dicts shared across handlers (history, timers, pending_approval)
-auth_users.py         → VIP allowlist CRUD, /usuarios admin command, callback routing (au: prefix)
+auth_users.py         → VIP allowlist CRUD, admin slash commands (/usuarios, /nota, /notas, /borrar_notas), callback routing (au: prefix)
 handlers/
   router.py           → process_update() — central Telegram update dispatch
   business.py         → _handle_business_message() — VIP message ingestion, escalation, timer management
@@ -38,7 +38,7 @@ services/
   llm.py              → get_diana_response(), raw_call() — DeepSeek API with memory + few-shot injection
   delivery.py         → deliver_vip_response() — read receipt → pause → typing → send (human-like timing)
   training.py         → SQLite persistence for training examples (examples table) and few-shot retrieval
-  memory.py           → MemoryService — per-user fact storage (user_memory table) and background extraction
+  memory.py           → MemoryService — per-user facts + manual notes (user_memory table), background extraction
 extractor.py          → Standalone Telethon tool for chat history export
 ```
 
@@ -70,7 +70,19 @@ extractor.py          → Standalone Telethon tool for chat history export
 
 ### Callback routing
 
-Inline callbacks use prefixed `callback_data`: `a:approve:<id>`, `a:fix:<id>` (approval), `t:good:<id>`, `t:bad:<id>`, `t:fix:<id>` (training feedback), `au:del:<id>` (user management).
+Inline callbacks use prefixed `callback_data`: `a:approve:<id>`, `a:fix:<id>`, `a:note:<id>` (approval), `t:good:<id>`, `t:bad:<id>`, `t:fix:<id>` (training feedback), `au:del:<id>` (user management).
+
+### Admin commands (Diana DM)
+
+| Command | Purpose |
+|---------|---------|
+| `/usuarios` | VIP allowlist — list, add (forward user), delete |
+| `/notas <user_id>` | View Diana notes + auto-extracted facts for a VIP |
+| `/nota <user_id> <text>` | Add manual note (injected at top of LLM context) |
+| `/borrar_notas <user_id>` | Clear all notes for a VIP |
+| `/cancelar_nota` | Cancel in-progress note capture; approval draft stays pending |
+
+Notes also attachable via 📝 **Nota** on approval drafts. Command order in `auth_users.py`: `/notas` before `/nota ` (prefix guard).
 
 ### Generation tracking
 

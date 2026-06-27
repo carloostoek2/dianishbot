@@ -73,10 +73,8 @@ def make_message(bot, make_user, make_chat):
             chat=chat,
             from_user=user,
             text=text,
-            bot=bot,
+            business_connection_id=business_connection_id,
         )
-        # Attach business attrs manually (PTB objects are frozen-ish in tests)
-        msg.business_connection_id = business_connection_id
         return msg
     return _factory
 
@@ -101,12 +99,9 @@ def make_update(make_message):
         msg = make_message(
             text=text, user=user, chat=chat, business_connection_id=business_connection_id
         )
-        # The router looks at update.business_message
-        update = Update(update_id=update_id, message=msg)
-        # Simulate business routing attribute
-        update.business_message = msg if business_connection_id else None
-        update.edited_business_message = None
-        return update
+        if business_connection_id:
+            return Update(update_id=update_id, business_message=msg)
+        return Update(update_id=update_id, message=msg)
     return _factory
 
 
@@ -124,7 +119,6 @@ def make_callback_query(bot, make_user, make_message):
             from_user=user,
             data=data,
             message=msg,
-            bot=bot,
             chat_instance="test_inst",
         )
         return cq
@@ -133,10 +127,61 @@ def make_callback_query(bot, make_user, make_message):
 
 @pytest.fixture
 def make_callback_update(make_callback_query):
-    def _factory(data: str = "a:approve:42", update_id: int = 99):
-        cq = make_callback_query(data=data)
+    def _factory(
+        data: str = "a:approve:42",
+        update_id: int = 99,
+        user=None,
+        message=None,
+    ):
+        cq = make_callback_query(data=data, user=user, message=message)
         upd = Update(update_id=update_id, callback_query=cq)
         return upd
+    return _factory
+
+
+@pytest.fixture
+def make_mock_message(make_user, make_chat):
+    """MagicMock message with async reply_text (PTB 22+ objects are frozen)."""
+    def _factory(
+        text: str = "hola",
+        user=None,
+        chat=None,
+    ):
+        user = user or make_user()
+        chat = chat or make_chat()
+        msg = MagicMock()
+        msg.text = text
+        msg.from_user = user
+        msg.chat = chat
+        msg.reply_text = AsyncMock()
+        return msg
+    return _factory
+
+
+@pytest.fixture
+def make_mock_update(make_mock_message):
+    def _factory(text: str = "hola", user=None, chat=None):
+        msg = make_mock_message(text=text, user=user, chat=chat)
+        update = MagicMock()
+        update.message = msg
+        update.business_message = None
+        update.callback_query = None
+        return update
+    return _factory
+
+
+@pytest.fixture
+def make_mock_callback_update(make_user):
+    def _factory(data: str = "a:approve:42", user=None):
+        user = user or make_user()
+        cq = MagicMock()
+        cq.data = data
+        cq.from_user = user
+        cq.answer = AsyncMock()
+        cq.edit_message_text = AsyncMock()
+        update = MagicMock()
+        update.callback_query = cq
+        return update
     return _factory
 
 
