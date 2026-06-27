@@ -16,7 +16,7 @@ python extractor.py list                  # List exportable chats
 python extractor.py export --chat <id> --format training --import-db
 ```
 
-No build step, linter, formatter, or CI pipeline. Automated tests: `PYTHONPATH=. pytest tests/` (103 tests — see docs/TESTING.md). Manual validation still required against a Telegram test bot.
+No build step, linter, formatter, or CI pipeline. Automated tests: `PYTHONPATH=. pytest tests/` (141 tests — see docs/TESTING.md). Manual validation still required against a Telegram test bot.
 
 ## Architecture
 
@@ -57,7 +57,7 @@ extractor.py          → Standalone Telethon tool for chat history export
 3. `needs_escalation()` scans `ESCALATE_KEYWORDS`; matches skip auto-reply, log to `diana_escalaciones.txt`, notify Diana via DM
 4. Cancellable `asyncio` timer schedules `auto_reply()` — delay depends on `APPROVAL_MODE`
 5. `get_diana_response()` builds prompt: system + memory context + few-shots → DeepSeek returns JSON (`response`, `confidence`, `topic`)
-6. **Supervised mode** (`APPROVAL_MODE=True`): draft sent to admin DM with approve/fix buttons. **Autonomous mode**: confidence < `CONFIDENCE_THRESHOLD` triggers Diana notification; otherwise delivers directly
+6. **Supervised mode** (`APPROVAL_MODE=True`): draft sent to admin DM with approve/fix/regen/nav buttons; Diana can browse variants (`Borrador k/n`) before delivery. **Autonomous mode**: confidence < `CONFIDENCE_THRESHOLD` triggers Diana notification; otherwise delivers directly
 7. `deliver_vip_response()` runs read receipt → random pause → simulated typing → send via `business_connection_id`
 8. Response saved to `diana_training.db`. Background `MemoryService.extract_and_update()` runs fact extraction
 
@@ -70,7 +70,15 @@ extractor.py          → Standalone Telethon tool for chat history export
 
 ### Callback routing
 
-Inline callbacks use prefixed `callback_data`: `a:approve:<id>`, `a:fix:<id>`, `a:note:<id>` (approval), `t:good:<id>`, `t:bad:<id>`, `t:fix:<id>` (training feedback), `au:del:<id>` (user management).
+Inline callbacks use prefixed `callback_data` (always 3 parts: `prefix:action:id`):
+
+| Prefix | Actions | Purpose |
+|--------|---------|---------|
+| `a:` | `approve`, `fix`, `note`, `regen`, `prev`, `next` | Supervised approval — Enviar/Corregir/Nota on **selected** variant; regen appends variant; prev/next navigate |
+| `t:` | `good`, `bad`, `fix` | Autonomous training feedback |
+| `au:` | `del` | VIP allowlist management |
+
+Examples: `a:approve:<id>`, `a:regen:<id>`, `a:prev:<id>`, `a:next:<id>`, `t:good:<id>`, `au:del:<id>`.
 
 ### Admin commands (Diana DM)
 

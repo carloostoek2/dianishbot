@@ -68,12 +68,17 @@ async def auto_reply(
             "chat_id": chat_id,
             "bc_id": bc_id,
             "username": username,
-            "response": response,
             "gen": gen,
+            "variants": [
+                {"response": response, "confidence": confidence, "topic": topic},
+            ],
+            "selected": 0,
+            "regenerating": False,
         }
         await notify_diana_approval(
             bot, example_id, username, history.get(chat_id, []),
             response, confidence, topic,
+            chat_id=chat_id, gen=gen,
         )
     else:
         if confidence < CONFIDENCE_THRESHOLD:

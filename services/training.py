@@ -199,6 +199,16 @@ def update_rating(example_id: int, rating: str, correction: str | None = None):
     conn.commit()
 
 
+def update_bot_response(example_id: int, response: str) -> None:
+    """Sync examples.bot_response when Diana approves a non-initial variant."""
+    conn = _require_db()
+    conn.execute(
+        "UPDATE examples SET bot_response=? WHERE id=?",
+        (response, example_id),
+    )
+    conn.commit()
+
+
 def get_few_shots(topic: str) -> list[dict]:
     """Ejemplos aprobados/corregidos por Diana, ordenados del más reciente al más antiguo."""
     conn = _require_db()

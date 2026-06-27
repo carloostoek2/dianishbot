@@ -2,37 +2,104 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from config import DIANA_ADMIN_CHAT_ID
-from state import awaiting_correction, awaiting_note, pending_approval
+from state import (
+    awaiting_correction, awaiting_note, history, pending_approval, reply_gen,
+)
 from services.delivery import deliver_vip_response
-from services.training import update_rating
+from services.training import update_rating, update_bot_response
 from services.memory import schedule_memory_extract
 from services import llm as llm_mod
-from services.llm import failure_label
-from state import history
+from services.llm import FAIL_ABORTED, failure_label, get_diana_response
+
+MAX_APPROVAL_VARIANTS = 10
+
 log = logging.getLogger("diana")
+
+
+def _clamp_selected(pending: dict) -> int:
+    last = len(pending["variants"]) - 1
+    return max(0, min(pending["selected"], last))
+
+
+def _selected_variant(pending: dict) -> dict:
+    return pending["variants"][_clamp_selected(pending)]
+
+
+def _format_approval_text(
+    username: str,
+    context: list,
+    pending: dict,
+    *,
+    failure_note: str | None = None,
+) -> str:
+    variant = _selected_variant(pending)
+    k = _clamp_selected(pending) + 1
+    n = len(pending["variants"])
+    preview = "\n".join([
+        f"{'[Usuario]' if m['role'] == 'user' else '[Bot]'} {m['content'][:80]}"
+        for m in context[-4:]
+    ])
+    response_display = variant["response"]
+    max_response_chars = 2800
+    if len(response_display) > max_response_chars:
+        response_display = response_display[:max_response_chars] + "…"
+    stale = reply_gen.get(pending["chat_id"]) != pending["gen"]
+    stale_line = (
+        "\n⚠️ Chat tiene mensaje más reciente — borrador puede estar obsoleto.\n"
+        if stale else ""
+    )
+    failure_line = f"\n{failure_note}\n" if failure_note else ""
+    return (
+        f"Borrador {k}/{n} para {username} "
+        f"(conf {variant['confidence']}% | tema: {variant['topic']})"
+        f"{stale_line}{failure_line}\n\n"
+        f"Contexto:\n{preview}\n\n"
+        f"Respuesta propuesta:\n{response_display}"
+    )
+
+
+def _build_approval_keyboard(example_id: int) -> InlineKeyboardMarkup:
+    row1 = [
+        InlineKeyboardButton("Enviar tal cual", callback_data=f"a:approve:{example_id}"),
+        InlineKeyboardButton("Corregir antes", callback_data=f"a:fix:{example_id}"),
+        InlineKeyboardButton("📝 Nota", callback_data=f"a:note:{example_id}"),
+    ]
+    row2 = [
+        InlineKeyboardButton("◀ Anterior", callback_data=f"a:prev:{example_id}"),
+        InlineKeyboardButton("🔄 Regenerar", callback_data=f"a:regen:{example_id}"),
+        InlineKeyboardButton("Siguiente ▶", callback_data=f"a:next:{example_id}"),
+    ]
+    return InlineKeyboardMarkup([row1, row2])
+
+
+async def _refresh_approval_message(
+    cq, pending: dict, ex_id: int, context: list, *, failure_note: str | None = None,
+) -> None:
+    texto = _format_approval_text(
+        pending["username"], context, pending, failure_note=failure_note,
+    )
+    teclado = _build_approval_keyboard(ex_id)
+    await cq.edit_message_text(texto, reply_markup=teclado)
 
 
 async def notify_diana_approval(
     bot, example_id: int, username: str, context: list,
     response: str, confidence: int, topic: str,
+    *, chat_id: int, gen: int,
 ):
     """Envía el borrador a Diana ANTES de mandarlo al usuario."""
     if not DIANA_ADMIN_CHAT_ID:
         return
-    preview = "\n".join([
-        f"{'[Usuario]' if m['role'] == 'user' else '[Bot]'} {m['content'][:80]}"
-        for m in context[-4:]
-    ])
-    texto = (
-        f"Borrador listo para {username} (conf {confidence}% | tema: {topic})\n\n"
-        f"Contexto:\n{preview}\n\n"
-        f"Respuesta propuesta:\n{response}"
-    )
-    teclado = InlineKeyboardMarkup([[
-        InlineKeyboardButton("Enviar tal cual",  callback_data=f"a:approve:{example_id}"),
-        InlineKeyboardButton("Corregir antes",   callback_data=f"a:fix:{example_id}"),
-        InlineKeyboardButton("📝 Nota",          callback_data=f"a:note:{example_id}"),
-    ]])
+    pending = {
+        "chat_id": chat_id,
+        "username": username,
+        "gen": gen,
+        "variants": [{"response": response, "confidence": confidence, "topic": topic}],
+        "selected": 0,
+        "regenerating": False,
+    }
+    texto = _format_approval_text(username, context, pending)
+    teclado = _build_approval_keyboard(example_id)
     try:
         await bot.send_message(
             chat_id=DIANA_ADMIN_CHAT_ID,
@@ -160,9 +227,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if prefix not in ("a", "t"):
         return False
 
-    if prefix == "a" and action == "approve":
-        await cq.answer("Enviando...")
-    else:
+    if not (prefix == "a" and action in ("approve", "regen", "prev", "next", "fix", "note")):
         await cq.answer()
 
     # ══ MODO APROBACIÓN (a:) ═══════════════════════════════════════
@@ -170,23 +235,35 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if action == "approve":
             awaiting_note.pop(cq.from_user.id, None)
             if ex_id not in pending_approval:
+                await cq.answer()
                 await cq.edit_message_text("Este borrador ya expiró o fue procesado.")
                 return True
             pending = pending_approval[ex_id]
+            if pending.get("regenerating"):
+                await cq.answer("Espera a que termine la regeneración")
+                return True
+            if reply_gen.get(pending["chat_id"]) != pending["gen"]:
+                await cq.answer("Chat actualizado — borrador obsoleto")
+                return True
+            variant = _selected_variant(pending)
+            text = variant["response"]
+            await cq.answer("Enviando...")
             await cq.edit_message_text(
                 f"Enviando a {pending['username']}...",
                 reply_markup=None,
             )
-            pending = pending_approval.pop(ex_id)
             ok = await deliver_vip_response(
                 context.bot,
                 chat_id=pending["chat_id"],
                 bc_id=pending["bc_id"],
                 username=pending["username"],
                 gen=pending["gen"],
-                text=pending["response"],
+                text=text,
             )
             if ok:
+                pending_approval.pop(ex_id)
+                if pending["selected"] != 0:
+                    update_bot_response(ex_id, text)
                 update_rating(ex_id, "good")
                 schedule_memory_extract(
                     llm_mod.memory_service,
@@ -197,21 +274,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 await cq.edit_message_text(f"Enviado a {pending['username']}.")
                 log.info(f"Aprobado y enviado: ejemplo {ex_id} → {pending['username']}")
             else:
-                await cq.edit_message_text(
-                    f"No enviado a {pending['username']}: el chat tiene un mensaje más reciente."
+                await _refresh_approval_message(
+                    cq, pending, ex_id, history.get(pending["chat_id"], []),
+                    failure_note="⚠️ No enviado: el chat tiene un mensaje más reciente.",
                 )
                 log.warning(f"Aprobación {ex_id} obsoleta — gen desactualizado")
 
         elif action == "note":
             if ex_id not in pending_approval:
+                await cq.answer()
                 await cq.edit_message_text("Este borrador ya expiró o fue procesado.")
                 return True
             pending = pending_approval[ex_id]
+            if pending.get("regenerating"):
+                await cq.answer("Espera a que termine la regeneración")
+                return True
             awaiting_correction.pop(cq.from_user.id, None)
             awaiting_note[cq.from_user.id] = {
                 "user_id": pending["chat_id"],
                 "username": pending["username"],
+                "example_id": ex_id,
             }
+            await cq.answer()
             await cq.edit_message_text(
                 f"✏️ Escribe tu nota para {pending['username']}:\n\n"
                 f"Se guardará en su perfil y se usará en todas las respuestas futuras.\n"
@@ -220,15 +304,130 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         elif action == "fix":
             if ex_id not in pending_approval:
+                await cq.answer()
                 await cq.edit_message_text("Este borrador ya expiró o fue procesado.")
                 return True
             pending = pending_approval[ex_id]
+            if pending.get("regenerating"):
+                await cq.answer("Espera a que termine la regeneración")
+                return True
             awaiting_note.pop(cq.from_user.id, None)
             awaiting_correction[cq.from_user.id] = ex_id
+            variant = _selected_variant(pending)
+            await cq.answer()
             await cq.edit_message_text(
                 f"Escribe la respuesta corregida para {pending['username']}:\n\n"
-                f"Borrador actual:\n{pending['response'][:200]}"
+                f"Borrador actual:\n{variant['response'][:200]}"
             )
+
+        elif action == "regen":
+            if ex_id not in pending_approval:
+                await cq.answer()
+                await cq.edit_message_text("Este borrador ya expiró o fue procesado.")
+                return True
+            pending = pending_approval[ex_id]
+            if pending.get("regenerating"):
+                await cq.answer("Ya generando...")
+                return True
+            if reply_gen.get(pending["chat_id"]) != pending["gen"]:
+                await cq.answer("Chat actualizado — borrador obsoleto")
+                return True
+            if len(pending["variants"]) >= MAX_APPROVAL_VARIANTS:
+                await cq.answer("Máximo de variantes alcanzado")
+                return True
+            pending["regenerating"] = True
+            await cq.answer("Generando...")
+            response = confidence = topic = failure = None
+            regen_error = False
+            try:
+                response, confidence, topic, failure = await get_diana_response(
+                    pending["chat_id"],
+                    should_abort=lambda: reply_gen.get(pending["chat_id"]) != pending["gen"],
+                )
+            except Exception as e:
+                log.error(f"Regen error ejemplo {ex_id}: {e}")
+                regen_error = True
+            finally:
+                if ex_id in pending_approval:
+                    pending_approval[ex_id]["regenerating"] = False
+            if ex_id not in pending_approval:
+                return True
+            pending = pending_approval[ex_id]
+            chat_context = history.get(pending["chat_id"], [])
+            if regen_error:
+                failure_note = "⚠️ Regeneración falló: error inesperado"
+                await _refresh_approval_message(
+                    cq, pending, ex_id, chat_context, failure_note=failure_note,
+                )
+                return True
+            if reply_gen.get(pending["chat_id"]) != pending["gen"]:
+                failure_note = (
+                    "⚠️ Regeneración cancelada: el chat se actualizó mientras generaba."
+                )
+                log.warning(f"Regen abortado post-LLM ejemplo {ex_id}: gen desactualizado")
+                await _refresh_approval_message(
+                    cq, pending, ex_id, chat_context, failure_note=failure_note,
+                )
+                return True
+            if not response:
+                if failure and failure.reason == FAIL_ABORTED:
+                    failure_note = (
+                        "⚠️ Regeneración cancelada: llegó un mensaje nuevo en el chat."
+                    )
+                    log.warning(f"Regen abortado ejemplo {ex_id}: {failure_label(FAIL_ABORTED)}")
+                elif failure:
+                    failure_note = f"⚠️ Regeneración falló: {failure_label(failure.reason)}"
+                    log.warning(
+                        f"Regen fallido ejemplo {ex_id}: {failure_label(failure.reason)}"
+                    )
+                else:
+                    failure_note = "⚠️ Regeneración falló: sin respuesta"
+                    log.warning(f"Regen fallido ejemplo {ex_id}: sin respuesta")
+                await _refresh_approval_message(
+                    cq, pending, ex_id, chat_context, failure_note=failure_note,
+                )
+                return True
+            pending["variants"].append({
+                "response": response,
+                "confidence": confidence,
+                "topic": topic,
+            })
+            pending["selected"] = len(pending["variants"]) - 1
+            k = pending["selected"] + 1
+            n = len(pending["variants"])
+            await _refresh_approval_message(cq, pending, ex_id, chat_context)
+            log.info(f"Regenerado borrador ejemplo {ex_id} → variante {k}/{n}")
+
+        elif action == "prev":
+            if ex_id not in pending_approval:
+                await cq.answer()
+                await cq.edit_message_text("Este borrador ya expiró o fue procesado.")
+                return True
+            pending = pending_approval[ex_id]
+            if pending["selected"] > 0:
+                pending["selected"] -= 1
+                await cq.answer()
+                await _refresh_approval_message(
+                    cq, pending, ex_id, history.get(pending["chat_id"], []),
+                )
+            else:
+                await cq.answer("Primera opción")
+
+        elif action == "next":
+            if ex_id not in pending_approval:
+                await cq.answer()
+                await cq.edit_message_text("Este borrador ya expiró o fue procesado.")
+                return True
+            pending = pending_approval[ex_id]
+            last = len(pending["variants"]) - 1
+            if pending["selected"] < last:
+                pending["selected"] += 1
+                await cq.answer()
+                await _refresh_approval_message(
+                    cq, pending, ex_id, history.get(pending["chat_id"], []),
+                )
+            else:
+                await cq.answer("Última opción")
 
     # ══ MODO AUTÓNOMO — retroalimentación post-envío (t:) ══════════
     elif prefix == "t":
@@ -267,10 +466,9 @@ async def handle_diana_correction(update: Update, context: ContextTypes.DEFAULT_
 
     ex_id = awaiting_correction.pop(msg.from_user.id)
     correction = stripped
-    update_rating(ex_id, "corrected", correction)
 
     if ex_id in pending_approval:
-        pending = pending_approval.pop(ex_id)
+        pending = pending_approval[ex_id]
         ok = await deliver_vip_response(
             context.bot,
             chat_id=pending["chat_id"],
@@ -280,6 +478,8 @@ async def handle_diana_correction(update: Update, context: ContextTypes.DEFAULT_
             text=correction,
         )
         if ok:
+            pending_approval.pop(ex_id)
+            update_rating(ex_id, "corrected", correction)
             schedule_memory_extract(
                 llm_mod.memory_service,
                 pending["chat_id"],
@@ -292,11 +492,12 @@ async def handle_diana_correction(update: Update, context: ContextTypes.DEFAULT_
             log.info(f"Corrección enviada (aprobación): ejemplo {ex_id} → {pending['username']}")
         else:
             await msg.reply_text(
-                f"Corrección guardada pero no enviada a {pending['username']}: "
-                "el chat tiene un mensaje más reciente."
+                f"Corrección no enviada a {pending['username']}: "
+                "el chat tiene un mensaje más reciente. El borrador sigue pendiente."
             )
             log.warning(f"Corrección {ex_id} obsoleta — gen desactualizado")
     else:
+        update_rating(ex_id, "corrected", correction)
         await msg.reply_text(
             f"Corrección guardada (ejemplo {ex_id}). Se usará en respuestas futuras."
         )
@@ -320,8 +521,10 @@ async def handle_diana_note(
         base_cmd = stripped.split()[0].split("@")[0]
         if base_cmd == "/cancelar_nota":
             note_ctx = awaiting_note.pop(msg.from_user.id)
+            ex_ref = note_ctx.get("example_id")
+            ex_line = f" (ejemplo {ex_ref})" if ex_ref is not None else ""
             await msg.reply_text(
-                f"Nota cancelada. El borrador para {note_ctx['username']} "
+                f"Nota cancelada. El borrador para {note_ctx['username']}{ex_line} "
                 "sigue pendiente."
             )
             return True

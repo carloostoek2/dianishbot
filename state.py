@@ -10,7 +10,7 @@ log = logging.getLogger("diana")
 # ══ ESTADO DE CORRECCIÓN PENDIENTE ══════════════════════
 awaiting_correction: dict[int, int] = {}
 
-# Captura de nota manual mientras Diana escribe: {diana_telegram_id: {"user_id": int, "username": str}}
+# Captura de nota manual: {diana_telegram_id: {"user_id", "username", "example_id"?}}
 awaiting_note: dict[int, dict] = {}
 
 # ═══════════════════════════════════════════════════════
@@ -35,7 +35,8 @@ pending_msg: dict[int, int] = {}
 # generación de timer por chat — evita respuestas duplicadas si el timer se reinicia
 reply_gen: dict[int, int] = {}
 
-# Borradores en espera de aprobación de Diana: {example_id: {chat_id, bc_id, username, response, gen}}
+# Borradores en espera de aprobación: {example_id: {chat_id, bc_id, username, gen, variants[], selected, regenerating}}
+# variants[i] = {"response": str, "confidence": int, "topic": str}
 pending_approval: dict[int, dict] = {}
 
 # Metadatos de chats observados (no autorizados): {chat_id: {vip_id, username}}

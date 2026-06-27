@@ -41,8 +41,10 @@ def pending_entry():
         "chat_id": VIP_CHAT_ID,
         "bc_id": "bc_test",
         "username": "testvip",
-        "response": "hola",
         "gen": 1,
+        "variants": [{"response": "hola", "confidence": 90, "topic": "general"}],
+        "selected": 0,
+        "regenerating": False,
     }
 
 
@@ -58,6 +60,7 @@ async def test_a_note_sets_awaiting_note(
 
     assert ADMIN_ID in state.awaiting_note
     assert state.awaiting_note[ADMIN_ID]["user_id"] == VIP_CHAT_ID
+    assert state.awaiting_note[ADMIN_ID]["example_id"] == ex_id
     assert ex_id in state.pending_approval
 
 
@@ -154,12 +157,15 @@ async def test_notify_diana_approval_has_note_button():
             response="respuesta",
             confidence=90,
             topic="general",
+            chat_id=VIP_CHAT_ID,
+            gen=1,
         )
     bot.send_message.assert_awaited_once()
     markup = bot.send_message.await_args.kwargs["reply_markup"]
     callback_data = [btn.callback_data for row in markup.inline_keyboard for btn in row]
     assert "a:note:7" in callback_data
-    assert len(callback_data) == 3
+    assert "a:regen:7" in callback_data
+    assert len(callback_data) == 6
 
 
 @pytest.mark.asyncio
@@ -219,6 +225,7 @@ async def test_a_approve_clears_awaiting_note(
 ):
     ex_id = 46
     state.pending_approval[ex_id] = pending_entry.copy()
+    state.reply_gen[VIP_CHAT_ID] = 1
     state.awaiting_note[ADMIN_ID] = {
         "user_id": VIP_CHAT_ID,
         "username": "testvip",
