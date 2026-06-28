@@ -5,6 +5,7 @@ from telegram.ext import ContextTypes
 from config import DIANA_ADMIN_CHAT_ID
 from state import (
     awaiting_correction, awaiting_note, history, pending_approval, reply_gen,
+    _save_runtime_state,
 )
 from services.delivery import deliver_vip_response
 from services.training import update_rating, update_bot_response
@@ -230,6 +231,7 @@ async def _regen_approval_variant(ex_id: int) -> RegenResult:
         "topic": topic,
     })
     pending["selected"] = len(pending["variants"]) - 1
+    _save_runtime_state()
     return RegenResult(appended=True)
 
 
@@ -413,6 +415,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             if ok:
                 pending_approval.pop(ex_id)
+                _save_runtime_state()
                 if pending["selected"] != 0:
                     update_bot_response(ex_id, text)
                 update_rating(ex_id, "good")
@@ -522,6 +525,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 return True
             if pending["selected"] > 0:
                 pending["selected"] -= 1
+                _save_runtime_state()
                 await cq.answer()
                 await _refresh_approval_message(
                     cq, pending, ex_id, history.get(pending["chat_id"], []),
@@ -541,6 +545,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             last = len(pending["variants"]) - 1
             if pending["selected"] < last:
                 pending["selected"] += 1
+                _save_runtime_state()
                 await cq.answer()
                 await _refresh_approval_message(
                     cq, pending, ex_id, history.get(pending["chat_id"], []),
@@ -603,6 +608,7 @@ async def handle_diana_correction(update: Update, context: ContextTypes.DEFAULT_
         )
         if ok:
             pending_approval.pop(ex_id)
+            _save_runtime_state()
             update_rating(ex_id, "corrected", correction)
             schedule_memory_extract(
                 llm_mod.memory_service,

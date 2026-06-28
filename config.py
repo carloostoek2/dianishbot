@@ -27,7 +27,8 @@ VIP_USERS_SEED = {
 }
 AUTH_USERS_FILE = "diana_authorized_users.json"
 AUTH_USERS_MAX  = 10
-STATE_FILE      = "diana_state.json"
+STATE_FILE         = "diana_state.json"
+RUNTIME_STATE_FILE = "diana_runtime.json"
 
 RESPONSE_DELAY_MIN = 1   # minutos — inicio del rango de espera antes del flujo
 RESPONSE_DELAY_MAX = 8   # minutos — fin del rango (aleatorio entre min y max)

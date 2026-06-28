@@ -150,6 +150,37 @@ def format_llm_failure_report(days: int = 7) -> str:
     return "\n".join(lines)
 
 
+def get_pending_examples(since_hours: int = 24) -> list[dict]:
+    """Ejemplos con status pending sin rating — fallback de borradores tras reinicio."""
+    conn = _require_db()
+    since = (datetime.now() - timedelta(hours=since_hours)).isoformat()
+    rows = conn.execute(
+        """SELECT id, chat_id, username, context, bot_response, confidence, topic
+           FROM examples
+           WHERE status='pending' AND (rating IS NULL OR rating='')
+           AND ts >= ?
+           ORDER BY id DESC""",
+        (since,),
+    ).fetchall()
+    results = []
+    for row in rows:
+        ex_id, chat_id, username, ctx_json, response, confidence, topic = row
+        try:
+            context = json.loads(ctx_json)
+        except json.JSONDecodeError:
+            context = []
+        results.append({
+            "id": ex_id,
+            "chat_id": chat_id,
+            "username": username,
+            "context": context,
+            "response": response,
+            "confidence": confidence,
+            "topic": topic,
+        })
+    return results
+
+
 def save_example(chat_id, username, context, response, confidence, topic) -> int:
     conn = _require_db()
     cur = conn.execute(

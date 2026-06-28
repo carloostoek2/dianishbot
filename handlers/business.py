@@ -1,16 +1,16 @@
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram.ext import ContextTypes
 from config import ESCALATE_FILE, ESCALATE_KEYWORDS, OBSERVE_UNAUTHORIZED
 import auth_users
 from state import (
     connections, history, chat_bc, chat_meta, pending_msg, reply_gen, timers,
-    _save_connections_state,
+    timer_schedule, _clear_timer_schedule, _save_connections_state, _save_runtime_state,
 )
 from services.training import save_observed_example
 from .callbacks import notify_diana_escalation
-from .timer import auto_reply
+from .timer import auto_reply, compute_reply_delay
 log = logging.getLogger("diana")
 
 
@@ -51,6 +51,29 @@ def needs_escalation(text: str) -> str | None:
     return None
 
 
+async def escalate_to_diana(
+    bot,
+    *,
+    user_id: int,
+    username: str,
+    chat_id: int,
+    reason: str,
+    trigger_text: str,
+    context: list[dict],
+):
+    log_escalation(user_id, username, reason, context)
+    log.info(f"ESCALADO {username} — {reason}")
+    await notify_diana_escalation(
+        bot,
+        user_id=user_id,
+        username=username,
+        chat_id=chat_id,
+        reason=reason,
+        trigger_text=trigger_text,
+        context=context,
+    )
+
+
 async def _handle_business_message(
     msg,
     context: ContextTypes.DEFAULT_TYPE,
@@ -87,6 +110,8 @@ async def _handle_business_message(
         history.setdefault(chat_id, []).append({"role": "assistant", "content": text})
         if chat_id in timers:
             timers.pop(chat_id).cancel()
+            _clear_timer_schedule(chat_id)
+            _save_runtime_state()
             log.info(f"Timer cancelado para {chat_id}")
         if OBSERVE_UNAUTHORIZED and text.strip():
             meta = chat_meta.get(chat_id, {})
@@ -129,11 +154,11 @@ async def _handle_business_message(
     pending_msg[chat_id] = msg.message_id
     reason = needs_escalation(text)
     if reason:
-        log_escalation(vip_id, username, reason, history[chat_id])
-        log.info(f"ESCALADO {username} — {reason}")
         if chat_id in timers:
             timers.pop(chat_id).cancel()
-        await notify_diana_escalation(
+            _clear_timer_schedule(chat_id)
+            _save_runtime_state()
+        await escalate_to_diana(
             context.bot,
             user_id=vip_id,
             username=username,
@@ -146,10 +171,20 @@ async def _handle_business_message(
 
     if chat_id in timers:
         timers.pop(chat_id).cancel()
+        _clear_timer_schedule(chat_id)
 
     reply_gen[chat_id] = reply_gen.get(chat_id, 0) + 1
     gen = reply_gen[chat_id]
+    delay_sec = compute_reply_delay()
+    fire_at = (datetime.now() + timedelta(seconds=delay_sec)).isoformat(timespec="seconds")
+    timer_schedule[chat_id] = {
+        "username": username,
+        "bc_id": bc_id,
+        "gen": gen,
+        "fire_at": fire_at,
+    }
+    _save_runtime_state()
     task = asyncio.create_task(
-        auto_reply(context.bot, chat_id, username, bc_id, gen)
+        auto_reply(context.bot, chat_id, username, bc_id, gen, delay_sec=delay_sec)
     )
     timers[chat_id] = task

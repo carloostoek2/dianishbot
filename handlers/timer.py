@@ -2,9 +2,13 @@ import asyncio
 import random
 import logging
 from config import (
-    APPROVAL_MODE, SILENCE_MINUTES, RESPONSE_DELAY_MIN, RESPONSE_DELAY_MAX, CONFIDENCE_THRESHOLD,
+    APPROVAL_MODE, SILENCE_MINUTES, RESPONSE_DELAY_MIN, RESPONSE_DELAY_MAX,
+    CONFIDENCE_THRESHOLD,
 )
-from state import history, reply_gen, timers, pending_approval
+from state import (
+    history, reply_gen, timers, pending_approval,
+    _clear_timer_schedule, _save_runtime_state,
+)
 from services.llm import FAIL_ABORTED, get_diana_response, raw_call
 from services.training import save_example, save_llm_failure
 from services.delivery import deliver_vip_response
@@ -15,13 +19,25 @@ memory_service = None
 log = logging.getLogger("diana")
 
 
+def compute_reply_delay() -> float:
+    if APPROVAL_MODE:
+        return SILENCE_MINUTES * 60
+    return random.uniform(RESPONSE_DELAY_MIN * 60, RESPONSE_DELAY_MAX * 60)
+
+
+def _finish_timer(chat_id: int) -> None:
+    if timers.get(chat_id) is asyncio.current_task():
+        timers.pop(chat_id, None)
+    _clear_timer_schedule(chat_id)
+    _save_runtime_state()
+
+
 async def auto_reply(
     bot, chat_id: int, username: str, bc_id: str, gen: int,
+    *, delay_sec: float | None = None,
 ):
-    if APPROVAL_MODE:
-        delay_sec = SILENCE_MINUTES * 60
-    else:
-        delay_sec = random.uniform(RESPONSE_DELAY_MIN * 60, RESPONSE_DELAY_MAX * 60)
+    if delay_sec is None:
+        delay_sec = compute_reply_delay()
     log.info(f"⏳ {username}: respuesta programada en {delay_sec / 60:.1f} min")
 
     try:
@@ -47,11 +63,11 @@ async def auto_reply(
                 bot, username=username, chat_id=chat_id,
                 context=history.get(chat_id, []), failure=failure,
             )
-        if timers.get(chat_id) is asyncio.current_task():
-            timers.pop(chat_id, None)
+        _finish_timer(chat_id)
         return
 
     if reply_gen.get(chat_id) != gen:
+        _finish_timer(chat_id)
         return
 
     example_id = save_example(
@@ -75,6 +91,8 @@ async def auto_reply(
             "selected": 0,
             "regenerating": False,
         }
+        _clear_timer_schedule(chat_id)
+        _save_runtime_state()
         await notify_diana_approval(
             bot, example_id, username, history.get(chat_id, []),
             response, confidence, topic,
@@ -99,6 +117,7 @@ async def auto_reply(
                 )
         except Exception as e:
             log.error(f"Error enviando a {chat_id}: {e}")
+        _finish_timer(chat_id)
+        return
 
-    if timers.get(chat_id) is asyncio.current_task():
-        timers.pop(chat_id, None)
+    _finish_timer(chat_id)

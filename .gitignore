@@ -13,6 +13,7 @@ env/
 # Runtime data
 diana_authorized_users.json
 diana_state.json
+diana_runtime.json
 diana_training.db
 diana_training.db-shm
 diana_training.db-wal
