@@ -18,6 +18,7 @@ diana_llm_settings.json
 diana_training.db
 diana_training.db-shm
 diana_training.db-wal
+diana_traces.jsonl
 *.session
 exports/
 

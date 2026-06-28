@@ -294,13 +294,22 @@ async def get_diana_response(
     few_shots = build_few_shot_block(examples)
 
     from services import sandbox
+    from services import trace
 
     if sandbox.is_active(chat_id):
-        memory_block = sandbox.get_context_block(chat_id)
+        _trace_memory_source = "sandbox"
+        _trace_raw_memory = sandbox.get_context_block(chat_id)
+        _trace_profile = sandbox.get_profile(chat_id)
     elif memory_service:
-        memory_block = memory_service.get_context_block(chat_id)
+        _trace_memory_source = "real"
+        _trace_raw_memory = memory_service.get_context_block(chat_id)
+        _trace_profile = None
     else:
-        memory_block = ""
+        _trace_memory_source = "none"
+        _trace_raw_memory = ""
+        _trace_profile = None
+
+    memory_block = _trace_raw_memory
     if memory_block:
         # memory_block injection wrapped per security review (prompt injection high).
         # Explicit instruction + markers before/around block. Empty case "" identical
@@ -330,6 +339,19 @@ REGLAS CRÍTICAS DE ESTILO (prioridad máxima):
         *msgs[-MAX_HISTORY:],
     ]
 
+    _trace_injected = None
+    if trace.is_enabled():
+        from services import llm_settings
+        _trace_injected = {
+            "profile": _trace_profile,
+            "provider": llm_settings.get_provider(),
+            "model": llm_settings.get_model(),
+            "reasoning_enabled": False,
+            "memory_source": _trace_memory_source,
+            "system_prompt": system,
+            "history_messages": messages[1:],  # sin el system message, solo la conversación
+        }
+
     attempts = max_retries if max_retries is not None else LLM_MAX_RETRIES
     delay = retry_delay_sec if retry_delay_sec is not None else LLM_RETRY_DELAY_SEC
 
@@ -339,6 +361,12 @@ REGLAS CRÍTICAS DE ESTILO (prioridad máxima):
     for attempt in range(1, attempts + 1):
         if should_abort and should_abort():
             log.info(f"LLM cancelado para {chat_id}: {failure_label(FAIL_ABORTED)}")
+            if _trace_injected is not None:
+                trace.trace_call(chat_id, injected=_trace_injected, output={
+                    "raw": None,
+                    "parsed": None,
+                    "failure": {"reason": FAIL_ABORTED, "attempts": attempt, "detail": "nuevo mensaje del usuario"},
+                })
             return None, 0, topic_guess, LLMFailure(FAIL_ABORTED, attempt, "nuevo mensaje del usuario")
 
         raw, api_fail = await raw_call(
@@ -382,6 +410,16 @@ REGLAS CRÍTICAS DE ESTILO (prioridad máxima):
                 await asyncio.sleep(delay)
             continue
 
+        if _trace_injected is not None:
+            trace.trace_call(chat_id, injected=_trace_injected, output={
+                "raw": raw,
+                "parsed": {
+                    "response": response,
+                    "confidence": _parse_confidence(parsed.get("confidence", 100)),
+                    "topic": parsed.get("topic") or topic_guess,
+                },
+                "failure": None,
+            })
         return (
             response,
             _parse_confidence(parsed.get("confidence", 100)),
@@ -394,4 +432,10 @@ REGLAS CRÍTICAS DE ESTILO (prioridad máxima):
         f"LLM sin respuesta para {chat_id} tras {attempts} intentos: "
         f"{failure_label(last_reason)} — {last_detail!r}"
     )
+    if _trace_injected is not None:
+        trace.trace_call(chat_id, injected=_trace_injected, output={
+            "raw": None,
+            "parsed": None,
+            "failure": {"reason": last_reason, "attempts": attempts, "detail": last_detail},
+        })
     return None, 0, topic_guess, failure

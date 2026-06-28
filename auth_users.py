@@ -131,6 +131,7 @@ def _build_main_menu_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📊 Estado del Bot", callback_data="au:estado")],
         [InlineKeyboardButton("📈 Fallos del LLM", callback_data="au:fallos")],
         [InlineKeyboardButton("🤖 Config LLM", callback_data="au:llm")],
+        [InlineKeyboardButton("🔍 Trace LLM", callback_data="au:trace")],
         [InlineKeyboardButton("❓ Ayuda", callback_data="au:ayuda")],
         [InlineKeyboardButton("🙈 Ocultar Menu", callback_data="au:ocultar")],
     ])
@@ -176,6 +177,24 @@ def _build_llm_menu_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton("⬅️ Volver al menu", callback_data="au:menu"),
     ])
     return InlineKeyboardMarkup(rows)
+
+
+def _build_trace_menu_keyboard() -> InlineKeyboardMarkup:
+    from services import trace
+
+    estado = "ON" if trace.is_enabled() else "OFF"
+    toggle_label = "Desactivar" if trace.is_enabled() else "Activar"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            f"🔍 Trace: {estado}",
+            callback_data="au:trace:noop",
+        )],
+        [InlineKeyboardButton(
+            f"⏻ {toggle_label}",
+            callback_data="au:trace:toggle",
+        )],
+        [InlineKeyboardButton("⬅️ Volver al menu", callback_data="au:menu")],
+    ])
 
 
 def _build_user_list_keyboard() -> InlineKeyboardMarkup:
@@ -341,6 +360,7 @@ def build_estado_text(*, title: str = ESTADO_TITLE) -> str:
         SILENCE_MINUTES,
     )
     from services.llm_settings import format_estado_llm_line
+    from services import trace
     from state import pending_approval
 
     mode = "Supervisado" if APPROVAL_MODE else "Autonomo"
@@ -360,7 +380,8 @@ def build_estado_text(*, title: str = ESTADO_TITLE) -> str:
         f"*VIPs autorizados:* {vip_count}\n"
         f"*Borradores pendientes:* {pending}\n"
         f"*Observar no auth:* {'Si' if OBSERVE_UNAUTHORIZED else 'No'}\n"
-        f"{format_estado_llm_line()}"
+        f"{format_estado_llm_line()}\n"
+        f"{trace.format_estado_line()}"
     )
 
 
@@ -692,6 +713,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return True
 
         await query.answer("Acción LLM desconocida", show_alert=True)
+        return True
+
+    if action == "trace":
+        from services import trace
+
+        if len(parts) >= 2 and parts[1] == "toggle":
+            trace.toggle()
+            await query.answer(f"Trace {'ON' if trace.is_enabled() else 'OFF'}")
+        elif len(parts) >= 2 and parts[1] == "noop":
+            await query.answer()
+        else:
+            await query.answer()
+        await _replace_with_trace_menu(query)
         return True
 
     # ── Acciones con user_id ────────────────────────────
@@ -1031,6 +1065,20 @@ async def _replace_with_llm_menu(query) -> None:
     await _edit_or_send(query, text, _build_llm_menu_keyboard())
 
 
+async def _replace_with_trace_menu(query) -> None:
+    from services import trace
+
+    estado = "ON" if trace.is_enabled() else "OFF"
+    text = (
+        f"🔍 *Trace LLM*\n\n"
+        f"Estado: {estado}\n\n"
+        "Cuando esta activo, cada llamada al LLM se registra en "
+        "`diana_traces.jsonl` con el prompt inyectado, perfil, "
+        "modelo y output completo."
+    )
+    await _edit_or_send(query, text, _build_trace_menu_keyboard())
+
+
 async def _replace_with_estado(query) -> None:
     """Muestra estado del bot inline."""
     await _edit_or_send(query, build_estado_text(), _build_back_to_menu_keyboard())
@@ -1059,6 +1107,9 @@ async def _replace_with_ayuda(query) -> None:
         "`/estado` — Estado actual del bot\n"
         "`/fallos [dias]` — Reporte de fallos del LLM \\(7 dias por defecto\\)\n"
         "`🤖 Config LLM` — Cambiar proveedor/modelo sin reiniciar\n\n"
+        "*Trace y Debug*\n"
+        "`/trace on|off|estado` — Activar/desactivar traza global del LLM\n"
+        "`🔍 Trace LLM` — Toggle desde el menu inline\n\n"
         "*Utilidades*\n"
         "`/menu` — Mostrar el menu inline\n"
         "`/cancelar_nota` — Cancelar captura de nota en progreso\n"
@@ -1262,6 +1313,31 @@ async def handle_admin_message(
                 await msg.reply_text("Uso: /fallos [días]  (ej: /fallos 7)")
                 return True
         await msg.reply_text(format_llm_failure_report(days))
+        return True
+
+    if msg.text and msg.text.startswith("/trace"):
+        from services import trace
+        parts = msg.text.split()
+        if len(parts) < 2:
+            await msg.reply_text(
+                f"🔍 Trace LLM: {'ON' if trace.is_enabled() else 'OFF'}\n\n"
+                "Uso: /trace on | off | estado"
+            )
+            return True
+        sub = parts[1].lower()
+        if sub == "on":
+            trace.enable()
+            await msg.reply_text("✓ Trace LLM activado. Registrando en diana_traces.jsonl")
+        elif sub == "off":
+            trace.disable()
+            await msg.reply_text("✓ Trace LLM desactivado.")
+        elif sub == "estado":
+            await msg.reply_text(
+                f"🔍 Trace LLM: {'ON' if trace.is_enabled() else 'OFF'}\n"
+                f"Archivo: diana_traces.jsonl"
+            )
+        else:
+            await msg.reply_text("Uso: /trace on | off | estado")
         return True
 
     if msg.text and msg.text.startswith("/sandbox"):
