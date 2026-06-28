@@ -293,7 +293,14 @@ async def get_diana_response(
     examples = get_few_shots(topic_guess)
     few_shots = build_few_shot_block(examples)
 
-    memory_block = memory_service.get_context_block(chat_id) if memory_service else ""
+    from services import sandbox
+
+    if sandbox.is_active(chat_id):
+        memory_block = sandbox.get_context_block(chat_id)
+    elif memory_service:
+        memory_block = memory_service.get_context_block(chat_id)
+    else:
+        memory_block = ""
     if memory_block:
         # memory_block injection wrapped per security review (prompt injection high).
         # Explicit instruction + markers before/around block. Empty case "" identical

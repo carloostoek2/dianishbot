@@ -56,9 +56,11 @@ async def auto_reply(
     )
     if not response:
         if failure and failure.reason != FAIL_ABORTED:
-            save_llm_failure(
-                chat_id, username, history.get(chat_id, []), failure, topic,
-            )
+            from services import sandbox
+            if sandbox.should_persist(chat_id):
+                save_llm_failure(
+                    chat_id, username, history.get(chat_id, []), failure, topic,
+                )
             await notify_diana_llm_failure(
                 bot, username=username, chat_id=chat_id,
                 context=history.get(chat_id, []), failure=failure,
@@ -91,10 +93,14 @@ async def auto_reply(
         _finish_timer(chat_id)
         return
 
-    example_id = save_example(
-        chat_id, username, history.get(chat_id, []),
-        response, confidence, topic,
-    )
+    from services import sandbox
+    if sandbox.is_active(chat_id):
+        example_id = sandbox.allocate_draft_id()
+    else:
+        example_id = save_example(
+            chat_id, username, history.get(chat_id, []),
+            response, confidence, topic,
+        )
     log.info(
         f"Ejemplo {example_id} | conf={confidence}% | topic={topic} | "
         f"modo={'supervisado' if APPROVAL_MODE else 'autónomo'}"
@@ -132,7 +138,7 @@ async def auto_reply(
                 bot, chat_id=chat_id, bc_id=bc_id,
                 username=username, gen=gen, text=response,
             )
-            if ok:
+            if ok and sandbox.should_persist(chat_id):
                 schedule_memory_extract(
                     memory_service, chat_id, history.get(chat_id, []), raw_call,
                 )

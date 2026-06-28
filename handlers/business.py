@@ -14,7 +14,17 @@ from .timer import auto_reply, compute_reply_delay
 log = logging.getLogger("diana")
 
 
-def log_escalation(user_id: int, username: str, reason: str, context: list[dict]):
+def log_escalation(
+    user_id: int,
+    username: str,
+    reason: str,
+    context: list[dict],
+    *,
+    chat_id: int,
+):
+    from services import sandbox
+    if not sandbox.should_persist(chat_id):
+        return
     with open(ESCALATE_FILE, "a", encoding="utf-8") as f:
         f.write(f"\n{'═' * 50}\n")
         f.write(f"ESCALACIÓN — {datetime.now().strftime('%d/%m/%Y %H:%M')}\n")
@@ -61,7 +71,7 @@ async def escalate_to_diana(
     trigger_text: str,
     context: list[dict],
 ):
-    log_escalation(user_id, username, reason, context)
+    log_escalation(user_id, username, reason, context, chat_id=chat_id)
     log.info(f"ESCALADO {username} — {reason}")
     await notify_diana_escalation(
         bot,
@@ -116,7 +126,12 @@ async def _handle_business_message(
         if OBSERVE_UNAUTHORIZED and text.strip():
             meta = chat_meta.get(chat_id, {})
             vip = meta.get("vip_id")
-            if vip and not auth_users.is_authorized(vip, chat_id):
+            from services import sandbox
+            if (
+                vip
+                and not auth_users.is_authorized(vip, chat_id)
+                and sandbox.should_persist(chat_id)
+            ):
                 ex_id = save_observed_example(
                     chat_id, meta.get("username", str(chat_id)), prior, text,
                 )

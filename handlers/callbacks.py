@@ -10,7 +10,9 @@ from state import (
 from services.delivery import deliver_vip_response
 from services.training import update_rating, update_bot_response
 from services.memory import schedule_memory_extract
+import auth_users
 from services import llm as llm_mod
+from services import sandbox
 from services.llm import FAIL_ABORTED, failure_label, get_diana_response
 
 MAX_APPROVAL_VARIANTS = 10
@@ -59,7 +61,11 @@ def _format_approval_text(
         if stale else ""
     )
     failure_line = f"\n{failure_note}\n" if failure_note else ""
-    return (
+    header = ""
+    if sandbox.is_active(pending["chat_id"]):
+        prof = sandbox.get_profile(pending["chat_id"]) or "?"
+        header = f"🧪 SANDBOX — perfil: {prof}\n\n"
+    return header + (
         f"Borrador {k}/{n} para {username} "
         f"(conf {variant['confidence']}% | tema: {variant['topic']})"
         f"{stale_line}{failure_line}\n\n"
@@ -68,12 +74,15 @@ def _format_approval_text(
     )
 
 
-def _build_approval_keyboard(example_id: int) -> InlineKeyboardMarkup:
+def _build_approval_keyboard(example_id: int, chat_id: int) -> InlineKeyboardMarkup:
     row1 = [
         InlineKeyboardButton("Enviar tal cual", callback_data=f"a:approve:{example_id}"),
         InlineKeyboardButton("Corregir antes", callback_data=f"a:fix:{example_id}"),
-        InlineKeyboardButton("📝 Nota", callback_data=f"a:note:{example_id}"),
     ]
+    if not sandbox.is_active(chat_id):
+        row1.append(
+            InlineKeyboardButton("📝 Nota", callback_data=f"a:note:{example_id}"),
+        )
     row2 = [
         InlineKeyboardButton("◀ Anterior", callback_data=f"a:prev:{example_id}"),
         InlineKeyboardButton("🔄 Regenerar", callback_data=f"a:regen:{example_id}"),
@@ -88,7 +97,7 @@ def _approval_message_parts(
     texto = _format_approval_text(
         pending["username"], context, pending, failure_note=failure_note,
     )
-    teclado = _build_approval_keyboard(ex_id)
+    teclado = _build_approval_keyboard(ex_id, pending["chat_id"])
     return texto, teclado
 
 
@@ -252,7 +261,7 @@ async def notify_diana_approval(
         "regenerating": False,
     }
     texto = _format_approval_text(username, context, pending)
-    teclado = _build_approval_keyboard(example_id)
+    teclado = _build_approval_keyboard(example_id, chat_id)
     try:
         await bot.send_message(
             chat_id=DIANA_ADMIN_CHAT_ID,
@@ -380,6 +389,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if prefix not in ("a", "t"):
         return False
 
+    admin_id = auth_users.get_admin_id()
+    if admin_id is None or cq.from_user.id != admin_id:
+        await cq.answer("No autorizado")
+        return True
+
     if not (prefix == "a" and action in ("approve", "regen", "prev", "next", "fix", "note")):
         await cq.answer()
 
@@ -416,15 +430,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if ok:
                 pending_approval.pop(ex_id)
                 _save_runtime_state()
-                if pending["selected"] != 0:
-                    update_bot_response(ex_id, text)
-                update_rating(ex_id, "good")
-                schedule_memory_extract(
-                    llm_mod.memory_service,
-                    pending["chat_id"],
-                    history.get(pending["chat_id"], []),
-                    llm_mod.raw_call,
-                )
+                if sandbox.should_persist(pending["chat_id"]):
+                    if pending["selected"] != 0:
+                        update_bot_response(ex_id, text)
+                    update_rating(ex_id, "good")
+                    schedule_memory_extract(
+                        llm_mod.memory_service,
+                        pending["chat_id"],
+                        history.get(pending["chat_id"], []),
+                        llm_mod.raw_call,
+                    )
                 await cq.edit_message_text(f"Enviado a {pending['username']}.")
                 log.info(f"Aprobado y enviado: ejemplo {ex_id} → {pending['username']}")
             else:
@@ -440,6 +455,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 await cq.edit_message_text("Este borrador ya expiró o fue procesado.")
                 return True
             pending = pending_approval[ex_id]
+            if sandbox.is_active(pending["chat_id"]):
+                await cq.answer("Nota deshabilitada en sandbox")
+                return True
             if pending.get("regenerating"):
                 await cq.answer("Espera a que termine la regeneración")
                 return True
@@ -555,6 +573,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # ══ MODO AUTÓNOMO — retroalimentación post-envío (t:) ══════════
     elif prefix == "t":
+        if sandbox.is_synthetic_id(ex_id):
+            await cq.edit_message_text("Sandbox — sin persistencia.")
+            return True
         if action == "good":
             await _clear_awaiting_note_with_prompt_restore(context.bot, cq.from_user.id)
             update_rating(ex_id, "good")
@@ -609,16 +630,24 @@ async def handle_diana_correction(update: Update, context: ContextTypes.DEFAULT_
         if ok:
             pending_approval.pop(ex_id)
             _save_runtime_state()
-            update_rating(ex_id, "corrected", correction)
-            schedule_memory_extract(
-                llm_mod.memory_service,
-                pending["chat_id"],
-                history.get(pending["chat_id"], []),
-                llm_mod.raw_call,
-            )
-            await msg.reply_text(
-                f"Correccion enviada a {pending['username']} y guardada como ejemplo de entrenamiento."
-            )
+            if sandbox.should_persist(pending["chat_id"]):
+                update_rating(ex_id, "corrected", correction)
+                schedule_memory_extract(
+                    llm_mod.memory_service,
+                    pending["chat_id"],
+                    history.get(pending["chat_id"], []),
+                    llm_mod.raw_call,
+                )
+                confirm = (
+                    f"Correccion enviada a {pending['username']} "
+                    "y guardada como ejemplo de entrenamiento."
+                )
+            else:
+                confirm = (
+                    f"Correccion enviada a {pending['username']} "
+                    "(sandbox — sin persistencia)."
+                )
+            await msg.reply_text(confirm)
             log.info(f"Corrección enviada (aprobación): ejemplo {ex_id} → {pending['username']}")
         else:
             await msg.reply_text(
@@ -627,11 +656,14 @@ async def handle_diana_correction(update: Update, context: ContextTypes.DEFAULT_
             )
             log.warning(f"Corrección {ex_id} obsoleta — gen desactualizado")
     else:
-        update_rating(ex_id, "corrected", correction)
-        await msg.reply_text(
-            f"Corrección guardada (ejemplo {ex_id}). Se usará en respuestas futuras."
-        )
-        log.info(f"Corrección guardada (autónomo): ejemplo {ex_id} → '{correction[:60]}'")
+        if sandbox.is_synthetic_id(ex_id):
+            await msg.reply_text("Sandbox — sin persistencia.")
+        else:
+            update_rating(ex_id, "corrected", correction)
+            await msg.reply_text(
+                f"Corrección guardada (ejemplo {ex_id}). Se usará en respuestas futuras."
+            )
+            log.info(f"Corrección guardada (autónomo): ejemplo {ex_id} → '{correction[:60]}'")
 
     return True
 
@@ -701,6 +733,11 @@ async def handle_diana_note(
         return False
 
     note_ctx = awaiting_note[msg.from_user.id]
+    if sandbox.is_active(note_ctx["user_id"]):
+        awaiting_note.pop(msg.from_user.id, None)
+        await msg.reply_text("Nota deshabilitada en sandbox.")
+        return True
+
     if not llm_mod.memory_service:
         await msg.reply_text("Memoria no disponible.")
         return True

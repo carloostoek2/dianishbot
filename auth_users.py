@@ -198,17 +198,25 @@ def _build_user_list_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def _notes_keyboard_rows(user_id: int) -> list[list[InlineKeyboardButton]]:
+    """Fila de botones de notas — vacía si el chat está en sandbox."""
+    from services import sandbox
+    if sandbox.is_active(user_id):
+        return []
+    return [[
+        InlineKeyboardButton(
+            "📝 Agregar Nota", callback_data=f"au:note_add:{user_id}",
+        ),
+        InlineKeyboardButton(
+            "🗑 Borrar Notas", callback_data=f"au:notes_clear:{user_id}",
+        ),
+    ]]
+
+
 def _build_user_detail_keyboard(user_id: int) -> InlineKeyboardMarkup:
     """Keyboard para la vista detalle de un usuario."""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "📝 Agregar Nota", callback_data=f"au:note_add:{user_id}",
-            ),
-            InlineKeyboardButton(
-                "🗑 Borrar Notas", callback_data=f"au:notes_clear:{user_id}",
-            ),
-        ],
+    rows = list(_notes_keyboard_rows(user_id))
+    rows.extend([
         [
             InlineKeyboardButton(
                 "🗑 Eliminar Usuario", callback_data=f"au:del_confirm:{user_id}",
@@ -220,6 +228,7 @@ def _build_user_detail_keyboard(user_id: int) -> InlineKeyboardMarkup:
             ),
         ],
     ])
+    return InlineKeyboardMarkup(rows)
 
 
 def _build_confirm_delete_keyboard(user_id: int) -> InlineKeyboardMarkup:
@@ -432,6 +441,11 @@ async def send_user_detail(bot, chat_id: int, user_id: int) -> None:
         lines.append("")
         lines.append("Sin datos extraidos ni notas todavia.")
 
+    from services import sandbox
+    if sandbox.is_active(user_id):
+        lines.append("")
+        lines.append("🧪 Sandbox activo — notas deshabilitadas.")
+
     await bot.send_message(
         chat_id=chat_id,
         text="\n".join(lines),
@@ -475,20 +489,14 @@ async def send_user_notes_view(bot, chat_id: int, user_id: int) -> None:
         lines.append("No hay notas para este usuario.")
         lines.append("Usa el boton 📝 Agregar Nota para crear una.")
 
+    note_rows = _notes_keyboard_rows(user_id)
+    note_rows.append(
+        [InlineKeyboardButton("⬅️ Volver a la lista", callback_data="au:list")],
+    )
     await bot.send_message(
         chat_id=chat_id,
         text="\n".join(lines),
-        reply_markup=InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "📝 Agregar Nota", callback_data=f"au:note_add:{user_id}",
-                ),
-                InlineKeyboardButton(
-                    "🗑 Borrar Notas", callback_data=f"au:notes_clear:{user_id}",
-                ),
-            ],
-            [InlineKeyboardButton("⬅️ Volver a la lista", callback_data="au:list")],
-        ]),
+        reply_markup=InlineKeyboardMarkup(note_rows),
     )
 
 
@@ -722,17 +730,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return True
 
     if action == "note_add":
-        await query.answer()
         await _start_admin_note_capture(query, user_id)
         return True
 
     if action == "notes_clear":
+        from services import sandbox
+        if sandbox.is_active(user_id):
+            await query.answer(
+                "Notas deshabilitadas — chat en sandbox", show_alert=True,
+            )
+            return True
         await query.answer()
         await _replace_with_clear_notes_confirm(query, user_id)
         return True
 
     if action == "notes_clear_ok":
-        await query.answer()
         await _execute_clear_notes(query, user_id)
         return True
 
@@ -846,6 +858,11 @@ async def _replace_with_detail(query, user_id: int) -> None:
         lines.append("")
         lines.append("Sin datos extraidos ni notas todavia.")
 
+    from services import sandbox
+    if sandbox.is_active(user_id):
+        lines.append("")
+        lines.append("🧪 Sandbox activo — notas deshabilitadas.")
+
     lines.append("")
     lines.append("Usa los botones para gestionar este perfil.")
 
@@ -876,6 +893,7 @@ async def _replace_with_notes(query, user_id: int) -> None:
         return
 
     from services import llm as llm_mod
+    from services import sandbox
     from services.memory import extract_note_display_date, extract_note_display_text
 
     svc = llm_mod.memory_service
@@ -897,19 +915,18 @@ async def _replace_with_notes(query, user_id: int) -> None:
             lines.append(f"  [{date_str}] {text}")
     else:
         lines.append("No hay notas para este usuario.")
-        lines.append("Usa 📝 Agregar Nota para crear una.")
+        if not sandbox.is_active(user_id):
+            lines.append("Usa 📝 Agregar Nota para crear una.")
 
-    await _edit_or_send(query, "\n".join(lines), InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "📝 Agregar Nota", callback_data=f"au:note_add:{user_id}",
-            ),
-            InlineKeyboardButton(
-                "🗑 Borrar Notas", callback_data=f"au:notes_clear:{user_id}",
-            ),
-        ],
+    if sandbox.is_active(user_id):
+        lines.append("")
+        lines.append("🧪 Sandbox activo — notas deshabilitadas.")
+
+    note_rows = _notes_keyboard_rows(user_id)
+    note_rows.append(
         [InlineKeyboardButton("⬅️ Volver a la lista", callback_data="au:list")],
-    ]))
+    )
+    await _edit_or_send(query, "\n".join(lines), InlineKeyboardMarkup(note_rows))
 
 
 async def _replace_with_clear_notes_confirm(query, user_id: int) -> None:
@@ -937,6 +954,11 @@ async def _replace_with_clear_notes_confirm(query, user_id: int) -> None:
 
 
 async def _execute_clear_notes(query, user_id: int) -> None:
+    from services import sandbox
+    if sandbox.is_active(user_id):
+        await query.answer("Notas deshabilitadas — chat en sandbox", show_alert=True)
+        return
+
     from services import llm as llm_mod
 
     svc = llm_mod.memory_service
@@ -976,6 +998,11 @@ async def _start_admin_note_capture(query, user_id: int) -> None:
             "Ya estas escribiendo una nota. Termina o usa /cancelar_nota.",
             show_alert=True,
         )
+        return
+
+    from services import sandbox
+    if sandbox.is_active(user_id):
+        await query.answer("Nota deshabilitada — chat en sandbox", show_alert=True)
         return
 
     state.awaiting_admin_note[admin_id] = {
@@ -1024,7 +1051,10 @@ async def _replace_with_ayuda(query) -> None:
         "`/usuarios` — Listar, agregar \\(reenviando mensaje\\), eliminar VIPs\n"
         "`/notas <id>` — Ver notas y datos extraidos de un VIP\n"
         "`/nota <id> <texto>` — Agregar nota manual para un VIP\n"
-        "`/borrar_notas <id>` — Limpiar todas las notas de un VIP\n\n"
+        "`/borrar_notas <id>` — Limpiar todas las notas de un VIP\n"
+        "`/sandbox on|off <chat_id>` — Modo prueba sin persistencia\n"
+        "`/sandbox perfil <name>` — Cambiar perfil \\(ultimo on\\)\n"
+        "`/sandbox perfiles | estado | reset`\n\n"
         "*Estado y Monitoreo*\n"
         "`/estado` — Estado actual del bot\n"
         "`/fallos [dias]` — Reporte de fallos del LLM \\(7 dias por defecto\\)\n"
@@ -1064,6 +1094,12 @@ async def handle_admin_note(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return False
 
     note_ctx = state.awaiting_admin_note[msg.from_user.id]
+    from services import sandbox
+    if sandbox.is_active(note_ctx["user_id"]):
+        state.awaiting_admin_note.pop(msg.from_user.id, None)
+        await msg.reply_text("Nota deshabilitada en sandbox.")
+        return True
+
     from services import llm as llm_mod
 
     if not llm_mod.memory_service:
@@ -1099,6 +1135,110 @@ async def handle_admin_note(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return True
 
 
+async def _handle_sandbox_command(msg) -> bool:
+    from services import sandbox
+
+    text = (msg.text or "").strip()
+    parts = text.split()
+
+    if text == "/sandbox":
+        await msg.reply_text(
+            "Uso sandbox:\n"
+            "/sandbox on <chat_id> — Activar modo prueba (perfil nuevo)\n"
+            "/sandbox off <chat_id> — Desactivar y limpiar RAM\n"
+            "/sandbox perfil <name> — Cambiar perfil del último on\n"
+            "/sandbox perfiles — Listar perfiles disponibles\n"
+            "/sandbox estado — Sesiones activas\n"
+            "/sandbox reset — Limpiar RAM del chat en foco\n\n"
+            "⚠️ La entrega al VIP sigue activa — solo se desactiva la persistencia."
+        )
+        return True
+
+    if len(parts) < 2:
+        await msg.reply_text("Comando sandbox incompleto. Usa /sandbox para ayuda.")
+        return True
+
+    sub = parts[1].lower()
+
+    if sub == "on":
+        if len(parts) < 3:
+            await msg.reply_text("Uso: /sandbox on <chat_id>")
+            return True
+        try:
+            chat_id = int(parts[2])
+        except ValueError:
+            await msg.reply_text("chat_id debe ser numérico.")
+            return True
+        ok, err = sandbox.activate(chat_id)
+        if not ok:
+            await msg.reply_text(f"Error: {err}")
+            return True
+        reply = (
+            f"✓ Sandbox activo en chat {chat_id} — perfil: {sandbox.get_profile(chat_id)}"
+        )
+        if is_authorized(chat_id, chat_id):
+            reply += (
+                "\n\n⚠️ VIP autorizado: los mensajes aprobados SÍ se entregan al usuario real."
+            )
+        await msg.reply_text(reply)
+        return True
+
+    if sub == "off":
+        if len(parts) < 3:
+            await msg.reply_text("Uso: /sandbox off <chat_id>")
+            return True
+        try:
+            chat_id = int(parts[2])
+        except ValueError:
+            await msg.reply_text("chat_id debe ser numérico.")
+            return True
+        if not sandbox.is_active(chat_id):
+            await msg.reply_text(f"Chat {chat_id} no tenía sandbox activo.")
+            return True
+        sandbox.reset_chat_state(chat_id)
+        sandbox.deactivate(chat_id)
+        await msg.reply_text(f"✓ Sandbox desactivado en chat {chat_id}")
+        return True
+
+    if sub == "perfil":
+        if len(parts) < 3:
+            await msg.reply_text("Uso: /sandbox perfil <name>")
+            return True
+        name = parts[2].lower()
+        ok, err = sandbox.set_focus_profile(name)
+        if not ok:
+            await msg.reply_text(f"Error: {err}")
+            return True
+        focus = sandbox.get_focus_chat_id()
+        await msg.reply_text(
+            f"✓ Perfil {name} aplicado al chat {focus}"
+        )
+        return True
+
+    if sub == "perfiles":
+        lines = ["Perfiles sandbox:"]
+        for prof in sandbox.list_profiles():
+            lines.append(f"  {prof['name']} — {prof['label']}")
+        await msg.reply_text("\n".join(lines))
+        return True
+
+    if sub == "estado":
+        await msg.reply_text(sandbox.format_estado())
+        return True
+
+    if sub == "reset":
+        focus = sandbox.get_focus_chat_id()
+        if focus is None or not sandbox.is_active(focus):
+            await msg.reply_text("Sin chat sandbox en foco. Usa /sandbox on <chat_id>.")
+            return True
+        sandbox.reset_chat_state(focus)
+        await msg.reply_text(f"✓ RAM limpiada — sandbox sigue activo en chat {focus}")
+        return True
+
+    await msg.reply_text("Subcomando desconocido. Usa /sandbox para ayuda.")
+    return True
+
+
 async def handle_admin_message(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -1123,6 +1263,9 @@ async def handle_admin_message(
                 return True
         await msg.reply_text(format_llm_failure_report(days))
         return True
+
+    if msg.text and msg.text.startswith("/sandbox"):
+        return await _handle_sandbox_command(msg)
 
     # /notas before /nota (space) — prefix collision guard
     if msg.text and msg.text.startswith("/notas"):
@@ -1178,6 +1321,10 @@ async def handle_admin_message(
         except ValueError:
             await msg.reply_text("El user_id debe ser numérico.")
             return True
+        from services import sandbox
+        if sandbox.is_active(target_id):
+            await msg.reply_text("Nota deshabilitada — chat en sandbox.")
+            return True
         from services import llm as llm_mod
         if not llm_mod.memory_service:
             await msg.reply_text("Memoria no disponible.")
@@ -1207,6 +1354,10 @@ async def handle_admin_message(
             target_id = int(parts[1])
         except ValueError:
             await msg.reply_text("ID inválido.")
+            return True
+        from services import sandbox
+        if sandbox.is_active(target_id):
+            await msg.reply_text("Nota deshabilitada — chat en sandbox.")
             return True
         from services import llm as llm_mod
         if not llm_mod.memory_service:

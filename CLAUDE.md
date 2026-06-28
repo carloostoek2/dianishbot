@@ -89,8 +89,12 @@ Examples: `a:approve:<id>`, `a:regen:<id>`, `a:prev:<id>`, `a:next:<id>`, `t:goo
 | `/nota <user_id> <text>` | Add manual note (injected at top of LLM context) |
 | `/borrar_notas <user_id>` | Clear all notes for a VIP |
 | `/cancelar_nota` | Cancel in-progress note capture; approval draft stays pending |
+| `/sandbox on <chat_id>` | Test mode — frozen profile memory, no persistence; VIP delivery still active |
+| `/sandbox off <chat_id>` | Deactivate sandbox and clear chat RAM |
+| `/sandbox perfil <name>` | Switch profile on focused chat (`nuevo`, `cercano`, `distante`, `intenso`, `vip_largo`, `inyeccion_previa`) |
+| `/sandbox perfiles` \| `/sandbox estado` \| `/sandbox reset` | List profiles, active sessions, clear RAM (session stays on) |
 
-Notes also attachable via 📝 **Nota** on approval drafts. Command order in `auth_users.py`: `/notas` before `/nota ` (prefix guard).
+Notes also attachable via 📝 **Nota** on approval drafts (disabled in sandbox). Command order in `auth_users.py`: `/notas` before `/nota ` (prefix guard).
 
 ### Generation tracking
 

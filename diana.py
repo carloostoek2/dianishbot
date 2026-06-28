@@ -104,6 +104,10 @@ def main():
 
     llm_settings.init()
 
+    from services import sandbox
+    sandbox.init()
+    log.info(f"Sandbox perfiles: {len(sandbox.list_profiles())}")
+
     provider = llm_settings.get_provider()
     llm_key_name = "ANTHROPIC_KEY" if provider == "anthropic" else "DEEPSEEK_KEY"
     llm_key_val = ANTHROPIC_KEY if provider == "anthropic" else DEEPSEEK_KEY

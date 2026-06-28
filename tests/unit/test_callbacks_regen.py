@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 
+import auth_users
 import state
 from handlers.callbacks import (
     MAX_APPROVAL_VARIANTS,
@@ -16,6 +17,16 @@ from services.llm import FAIL_ABORTED, LLMFailure, failure_label
 
 ADMIN_ID = 555001
 VIP_CHAT_ID = 777001
+
+
+@pytest.fixture(autouse=True)
+def _set_admin(tmp_path):
+    users_file = tmp_path / "authorized.json"
+    auth_users.configure(
+        users_file=str(users_file), max_users=5, seed_user_ids=[], admin_id=ADMIN_ID,
+    )
+    auth_users.set_admin_id(ADMIN_ID)
+    yield
 
 
 @pytest.fixture(autouse=True)

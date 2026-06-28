@@ -58,13 +58,17 @@ diana_user_id: int | None = None
 
 
 def _active_chat_ids() -> set[int]:
+    from services import sandbox
+
     ids = set(timer_schedule.keys())
     for pending in pending_approval.values():
         ids.add(pending["chat_id"])
-    return ids
+    return {cid for cid in ids if not sandbox.is_active(cid)}
 
 
 def _build_runtime_snapshot() -> dict:
+    from services import sandbox
+
     active = _active_chat_ids()
     timers_out = []
     for chat_id, meta in timer_schedule.items():
@@ -82,6 +86,7 @@ def _build_runtime_snapshot() -> dict:
         "timers": timers_out,
         "pending_approval": {
             str(k): v for k, v in pending_approval.items()
+            if not sandbox.is_active(v.get("chat_id", 0))
         },
     }
 

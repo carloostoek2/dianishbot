@@ -21,6 +21,7 @@ ANTHROPIC_URL      = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL    = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 ANTHROPIC_VERSION  = "2023-06-01"
 LLM_SETTINGS_FILE = "diana_llm_settings.json"
+SANDBOX_PROFILES_FILE = "diana_sandbox_profiles.json"
 
 # Usuarios VIP iniciales (se migran a diana_authorized_users.json al primer arranque)
 VIP_USERS_SEED = {
