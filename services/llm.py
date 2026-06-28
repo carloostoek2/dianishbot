@@ -130,20 +130,92 @@ def guess_topic(text: str) -> str:
     return "general"
 
 
+_THINKING_MARKER_RE = re.compile(
+    r"<\|?[^>]*(?:begin|end)[^>]*thinking[^>]*>\|?",
+    re.IGNORECASE,
+)
+_THINKING_BLOCK_RE = re.compile(
+    r"<\|?[^>]*begin[^>]*thinking[^>]*>\|?.*?"
+    r"<\|?[^>]*end[^>]*thinking[^>]*>\|?",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _strip_thinking_markers(raw: str) -> str:
+    """Quita bloques/marcadores de reasoning de modelos DeepSeek v4."""
+    cleaned = _THINKING_BLOCK_RE.sub("", raw)
+    cleaned = _THINKING_MARKER_RE.sub("", cleaned)
+    return cleaned.strip()
+
+
+def _extract_json_object(raw: str) -> str | None:
+    """Localiza el primer objeto JSON en texto con ruido alrededor."""
+    start = raw.find("{")
+    if start < 0:
+        return None
+    try:
+        _, end = json.JSONDecoder().raw_decode(raw[start:])
+    except json.JSONDecodeError:
+        return None
+    return raw[start:start + end]
+
+
+def _extract_response_from_truncated(raw: str) -> str | None:
+    """Recupera el campo response sin tragarse el resto del JSON."""
+    m = re.search(r'"response"\s*:\s*"', raw)
+    if not m:
+        return None
+
+    chars: list[str] = []
+    i = m.end()
+    while i < len(raw):
+        ch = raw[i]
+        if ch == '"':
+            return "".join(chars)
+        if ch == "\\" and i + 1 < len(raw):
+            chars.append(ch)
+            chars.append(raw[i + 1])
+            i += 2
+            continue
+        chars.append(ch)
+        i += 1
+
+    text = "".join(chars).rstrip()
+    return text or None
+
+
 def _try_parse_llm_json(raw: str) -> tuple[dict | None, str | None]:
     """Parsea JSON del LLM. Si está truncado por max_tokens, intenta recuperar response."""
     if not raw or not raw.strip():
         return None, FAIL_EMPTY_API
 
-    try:
-        return json.loads(raw), None
-    except json.JSONDecodeError:
-        pass
+    candidates: list[str] = []
+    seen: set[str] = set()
 
-    # Respuesta cortada a mitad del JSON (típico cuando max_tokens se agota)
-    m = re.search(r'"response"\s*:\s*"(.*)', raw, re.DOTALL)
-    if m:
-        text = m.group(1).rstrip('",\n\r\t ')
+    def _add(candidate: str | None) -> None:
+        if not candidate:
+            return
+        text = candidate.strip()
+        if text and text not in seen:
+            seen.add(text)
+            candidates.append(text)
+
+    stripped = raw.strip()
+    cleaned = _strip_thinking_markers(stripped)
+    _add(stripped)
+    _add(cleaned)
+    for text in (stripped, cleaned):
+        blob = _extract_json_object(text)
+        _add(blob)
+
+    for candidate in candidates:
+        try:
+            return json.loads(candidate), None
+        except json.JSONDecodeError:
+            continue
+
+    for candidate in candidates:
+        text = _extract_response_from_truncated(candidate)
         if text:
             log.info(f"JSON truncado recuperado ({len(text)} chars)")
             return {"response": text, "confidence": 70, "topic": None}, None

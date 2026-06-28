@@ -4,7 +4,7 @@ These require zero Telegram mocks and are the best starting point.
 """
 
 import pytest
-from services.llm import guess_topic, _parse_confidence
+from services.llm import guess_topic, _parse_confidence, _try_parse_llm_json
 
 
 class TestGuessTopic:
@@ -44,6 +44,33 @@ from services.training import build_few_shot_block
 
 def test_build_few_shot_block_empty():
     assert build_few_shot_block([]) == ""
+
+
+class TestTryParseLlmJson:
+    def test_parses_valid_json(self):
+        parsed, fail = _try_parse_llm_json(
+            '{"response": "hola", "confidence": 85, "topic": "saludo"}',
+        )
+        assert fail is None
+        assert parsed["response"] == "hola"
+
+    def test_strips_deepseek_thinking_suffix(self):
+        raw = (
+            '{"response": "holis 😊 qué haces? jsjs", "confidence": 85, "topic": "saludo"}'
+            "<｜end▁of▁thinking｜>holis 😊 qué haces? jsjs"
+        )
+        parsed, fail = _try_parse_llm_json(raw)
+        assert fail is None
+        assert parsed["response"] == "holis 😊 qué haces? jsjs"
+        assert parsed["confidence"] == 85
+        assert parsed["topic"] == "saludo"
+
+    def test_recovers_truncated_json_without_tail_garbage(self):
+        truncated = '{"response": "Holis bien y tu como andas? bonito vie'
+        parsed, fail = _try_parse_llm_json(truncated)
+        assert fail is None
+        assert parsed["response"] == "Holis bien y tu como andas? bonito vie"
+        assert parsed["confidence"] == 70
 
 
 def test_build_few_shot_block_formats_content():
