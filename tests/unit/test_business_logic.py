@@ -1,6 +1,7 @@
 """Pure logic tests extracted from handlers/business.py (no Telegram)."""
 
 import pytest
+from config import is_llm_escalation_topic
 from handlers.business import needs_escalation
 
 
@@ -22,3 +23,20 @@ class TestNeedsEscalation:
             assert should_match in result
         else:
             assert result is None
+
+
+class TestIsLlmEscalationTopic:
+    @pytest.mark.parametrize(
+        "topic,expected",
+        [
+            ("escalado_humano", True),
+            ("escalado", True),
+            ("escalado_crisis", True),
+            ("Escalado_Humano", True),
+            ("saludo_casual", False),
+            ("mapa_del_deseo", False),
+            ("", False),
+        ],
+    )
+    def test_llm_escalation_topics(self, topic, expected):
+        assert is_llm_escalation_topic(topic) is expected

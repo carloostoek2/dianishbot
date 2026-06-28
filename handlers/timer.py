@@ -3,10 +3,10 @@ import random
 import logging
 from config import (
     APPROVAL_MODE, SILENCE_MINUTES, RESPONSE_DELAY_MIN, RESPONSE_DELAY_MAX,
-    CONFIDENCE_THRESHOLD,
+    CONFIDENCE_THRESHOLD, is_llm_escalation_topic,
 )
 from state import (
-    history, reply_gen, timers, pending_approval,
+    history, reply_gen, timers, pending_approval, chat_meta,
     _clear_timer_schedule, _save_runtime_state,
 )
 from services.llm import FAIL_ABORTED, get_diana_response, raw_call
@@ -67,6 +67,27 @@ async def auto_reply(
         return
 
     if reply_gen.get(chat_id) != gen:
+        _finish_timer(chat_id)
+        return
+
+    if is_llm_escalation_topic(topic):
+        from .business import escalate_to_diana
+
+        msgs = history.get(chat_id, [])
+        trigger = next(
+            (m["content"] for m in reversed(msgs) if m["role"] == "user"), "",
+        )
+        user_id = chat_meta.get(chat_id, {}).get("vip_id", chat_id)
+        reason = f"Tema LLM: '{topic}'"
+        await escalate_to_diana(
+            bot,
+            user_id=user_id,
+            username=username,
+            chat_id=chat_id,
+            reason=reason,
+            trigger_text=trigger,
+            context=msgs,
+        )
         _finish_timer(chat_id)
         return
 

@@ -289,3 +289,15 @@ ESCALATE_KEYWORDS = [
     "bot", "robot", "automático", "automatico",
     "inteligencia artificial", " ia ",
 ]
+
+# Topics que devuelve el LLM cuando el prompt pide escalar a Diana real
+ESCALATE_LLM_TOPICS = frozenset({"escalado_humano", "escalado"})
+
+
+def is_llm_escalation_topic(topic: str) -> bool:
+    if not topic:
+        return False
+    norm = topic.strip().lower().replace(" ", "_")
+    if norm in ESCALATE_LLM_TOPICS:
+        return True
+    return norm.startswith("escalado_")
