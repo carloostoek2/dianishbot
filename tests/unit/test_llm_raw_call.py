@@ -33,7 +33,8 @@ async def test_raw_call_deepseek_returns_content_on_200():
     resp = _mock_aiohttp_response(status=200, json_data=payload)
     session = _mock_aiohttp_session(resp)
 
-    with patch.object(llm_mod, "LLM_PROVIDER", "deepseek"), \
+    with patch("services.llm_settings.get_provider", return_value="deepseek"), \
+         patch("services.llm_settings.get_model", return_value="deepseek-v4-pro"), \
          patch("services.llm.aiohttp.ClientSession", return_value=session):
         content, err = await raw_call([{"role": "user", "content": "hola"}])
 
@@ -44,6 +45,8 @@ async def test_raw_call_deepseek_returns_content_on_200():
     headers = session.post.call_args.kwargs["headers"]
     assert headers["Authorization"].startswith("Bearer ")
     assert headers["Content-Type"] == "application/json"
+    body = session.post.call_args.kwargs["json"]
+    assert body["model"] == "deepseek-v4-pro"
 
 
 @pytest.mark.asyncio
@@ -51,7 +54,8 @@ async def test_raw_call_deepseek_returns_none_on_http_error_status():
     resp = _mock_aiohttp_response(status=503, text="service unavailable")
     session = _mock_aiohttp_session(resp)
 
-    with patch.object(llm_mod, "LLM_PROVIDER", "deepseek"), \
+    with patch("services.llm_settings.get_provider", return_value="deepseek"), \
+         patch("services.llm_settings.get_model", return_value="deepseek-v4-pro"), \
          patch("services.llm.aiohttp.ClientSession", return_value=session):
         content, err = await raw_call([{"role": "user", "content": "hola"}])
 
@@ -70,7 +74,8 @@ async def test_raw_call_deepseek_returns_none_on_network_exception():
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=None)
 
-    with patch.object(llm_mod, "LLM_PROVIDER", "deepseek"), \
+    with patch("services.llm_settings.get_provider", return_value="deepseek"), \
+         patch("services.llm_settings.get_model", return_value="deepseek-v4-pro"), \
          patch("services.llm.aiohttp.ClientSession", return_value=session):
         content, err = await raw_call([{"role": "user", "content": "hola"}])
 
@@ -90,7 +95,8 @@ async def test_raw_call_anthropic_returns_content_on_200():
     resp = _mock_aiohttp_response(status=200, json_data=payload)
     session = _mock_aiohttp_session(resp)
 
-    with patch.object(llm_mod, "LLM_PROVIDER", "anthropic"), \
+    with patch("services.llm_settings.get_provider", return_value="anthropic"), \
+         patch("services.llm_settings.get_model", return_value="claude-haiku-4-5-20251001"), \
          patch("services.llm.aiohttp.ClientSession", return_value=session):
         content, err = await raw_call(
             [
@@ -105,7 +111,7 @@ async def test_raw_call_anthropic_returns_content_on_200():
     session.post.assert_called_once()
     call_kwargs = session.post.call_args.kwargs
     body = call_kwargs["json"]
-    assert body["model"] == llm_mod.ANTHROPIC_MODEL
+    assert body["model"] == "claude-haiku-4-5-20251001"
     assert body["system"] == "Eres Diana"
     assert body["messages"] == [{"role": "user", "content": "hola"}]
     assert body["output_config"]["format"]["type"] == "json_schema"
@@ -120,7 +126,8 @@ async def test_raw_call_anthropic_returns_none_on_http_error_status():
     resp = _mock_aiohttp_response(status=401, text="unauthorized")
     session = _mock_aiohttp_session(resp)
 
-    with patch.object(llm_mod, "LLM_PROVIDER", "anthropic"), \
+    with patch("services.llm_settings.get_provider", return_value="anthropic"), \
+         patch("services.llm_settings.get_model", return_value="claude-haiku-4-5-20251001"), \
          patch("services.llm.aiohttp.ClientSession", return_value=session):
         content, err = await raw_call([{"role": "user", "content": "hola"}])
 
@@ -131,3 +138,26 @@ async def test_raw_call_anthropic_returns_none_on_http_error_status():
     assert headers["x-api-key"] is not None
     assert headers["anthropic-version"] == llm_mod.ANTHROPIC_VERSION
     assert headers["Content-Type"] == "application/json"
+
+
+@pytest.mark.asyncio
+async def test_raw_call_reads_model_each_invocation():
+    """Second raw_call uses updated get_model return (hot-reload)."""
+    payload = {
+        "choices": [{"message": {"content": '{"response": "ok"}'}}],
+    }
+    resp = _mock_aiohttp_response(status=200, json_data=payload)
+    session = _mock_aiohttp_session(resp)
+
+    models = iter(["deepseek-v4-pro", "deepseek-v4-flash"])
+
+    with patch("services.llm_settings.get_provider", return_value="deepseek"), \
+         patch("services.llm_settings.get_model", side_effect=lambda: next(models)), \
+         patch("services.llm.aiohttp.ClientSession", return_value=session):
+        await raw_call([{"role": "user", "content": "hola"}])
+        await raw_call([{"role": "user", "content": "hola"}])
+
+    first_model = session.post.call_args_list[0].kwargs["json"]["model"]
+    second_model = session.post.call_args_list[1].kwargs["json"]["model"]
+    assert first_model == "deepseek-v4-pro"
+    assert second_model == "deepseek-v4-flash"
