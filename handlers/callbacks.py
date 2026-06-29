@@ -5,11 +5,14 @@ from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 from config import DIANA_ADMIN_CHAT_ID
 from state import (
-    awaiting_correction, awaiting_note, history, pending_approval, reply_gen,
-    _save_runtime_state,
+    awaiting_correction, awaiting_note, history, pending_approval, pending_escalations,
+    reply_gen, _save_runtime_state,
 )
 from services.delivery import deliver_vip_response
-from services.training import update_rating, update_bot_response
+from services.training import (
+    build_escalation_fp_block, review_escalation, save_example,
+    update_rating, update_bot_response,
+)
 from services.memory import schedule_memory_extract
 import auth_users
 from services import llm as llm_mod
@@ -273,6 +276,129 @@ async def _regen_approval_variant(ex_id: int) -> RegenResult:
     return RegenResult(appended=True)
 
 
+
+
+def _format_escalation_text(
+    *,
+    esc_id: int,
+    user_id: int,
+    username: str,
+    chat_id: int,
+    reason: str,
+    trigger_text: str,
+    context: list[dict],
+    pending: dict,
+) -> str:
+    preview = "\n".join([
+        f"{'[Usuario]' if m['role'] == 'user' else '[Bot]'} {m['content'][:120]}"
+        for m in context[-6:]
+    ])
+    footer = "Elige cómo calificar esta escalación."
+    if pending.get("verdict") == "valid":
+        footer = "Escalación confirmada. Responde manualmente en Business."
+    elif pending.get("verdict") == "false_positive":
+        footer = (
+            "Marcada como falso positivo. El patrón quedó registrado.\n"
+            "Pulsa Generar respuesta si quieres que el bot conteste."
+        )
+    return (
+        f"⚠️ ESCALACIÓN #{esc_id} — atención personal requerida\n\n"
+        f"Usuario: {username}\n"
+        f"ID: {user_id} | Chat: {chat_id}\n"
+        f"Motivo: {reason}\n\n"
+        f"Mensaje que disparó la alerta:\n{trigger_text[:300]}\n\n"
+        f"Contexto reciente:\n{preview}\n\n"
+        f"{footer}"
+    )
+
+
+def _build_escalation_keyboard(esc_id: int, pending: dict) -> InlineKeyboardMarkup | None:
+    verdict = pending.get("verdict")
+    if verdict == "valid":
+        return None
+    if verdict == "false_positive":
+        return InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "Generar respuesta", callback_data=f"e:gen:{esc_id}",
+            ),
+        ]])
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "Escalación correcta", callback_data=f"e:valid:{esc_id}",
+        ),
+        InlineKeyboardButton(
+            "Falso positivo", callback_data=f"e:fp:{esc_id}",
+        ),
+    ]])
+
+
+async def _refresh_escalation_message(cq, esc_id: int, pending: dict, context: list) -> None:
+    texto = _format_escalation_text(
+        esc_id=esc_id,
+        user_id=pending.get("user_id", pending["chat_id"]),
+        username=pending["username"],
+        chat_id=pending["chat_id"],
+        reason=pending["reason"],
+        trigger_text=pending["trigger_text"],
+        context=context,
+        pending=pending,
+    )
+    teclado = _build_escalation_keyboard(esc_id, pending)
+    await cq.edit_message_text(texto, reply_markup=teclado)
+
+
+async def _generate_from_escalation(bot, esc_id: int) -> str | None:
+    """Genera borrador tras FP. Devuelve mensaje de error o None si OK."""
+    if esc_id not in pending_escalations:
+        return "expired"
+    pending = pending_escalations[esc_id]
+    if pending.get("verdict") != "false_positive":
+        return "not_fp"
+
+    chat_id = pending["chat_id"]
+    reply_gen[chat_id] = reply_gen.get(chat_id, 0) + 1
+    gen = reply_gen[chat_id]
+    pending["gen"] = gen
+    _save_runtime_state()
+
+    response, confidence, topic, failure = await get_diana_response(
+        chat_id,
+        no_escalation=True,
+        should_abort=lambda: reply_gen.get(chat_id) != gen,
+    )
+    if not response:
+        if failure and failure.reason == FAIL_ABORTED:
+            return "stale"
+        detail = failure_label(failure.reason) if failure else "sin respuesta"
+        return f"llm_fail:{detail}"
+
+    if sandbox.is_active(chat_id):
+        example_id = sandbox.allocate_draft_id()
+    else:
+        example_id = save_example(
+            chat_id, pending["username"], history.get(chat_id, []),
+            response, confidence, topic,
+        )
+
+    pending_approval[example_id] = {
+        "chat_id": chat_id,
+        "bc_id": pending["bc_id"],
+        "username": pending["username"],
+        "gen": gen,
+        "variants": [{"response": response, "confidence": confidence, "topic": topic}],
+        "selected": 0,
+        "regenerating": False,
+    }
+    _save_runtime_state()
+    await notify_diana_approval(
+        bot, example_id, pending["username"], history.get(chat_id, []),
+        response, confidence, topic,
+        chat_id=chat_id, gen=gen,
+    )
+    pending_escalations.pop(esc_id, None)
+    _save_runtime_state()
+    return None
+
 async def notify_diana_approval(
     bot, example_id: int, username: str, context: list,
     response: str, confidence: int, topic: str,
@@ -305,35 +431,39 @@ async def notify_diana_approval(
 async def notify_diana_escalation(
     bot,
     *,
+    esc_id: int,
     user_id: int,
     username: str,
     chat_id: int,
     reason: str,
     trigger_text: str,
     context: list[dict],
+    pending: dict,
 ):
     """Alerta a Diana cuando un VIP necesita atención personal."""
     if not DIANA_ADMIN_CHAT_ID:
         return
-    preview = "\n".join([
-        f"{'[Usuario]' if m['role'] == 'user' else '[Bot]'} {m['content'][:120]}"
-        for m in context[-6:]
-    ])
-    texto = (
-        "⚠️ ESCALACIÓN — atención personal requerida\n\n"
-        f"Usuario: {username}\n"
-        f"ID: {user_id} | Chat: {chat_id}\n"
-        f"Motivo: {reason}\n\n"
-        f"Mensaje que disparó la alerta:\n{trigger_text[:300]}\n\n"
-        f"Contexto reciente:\n{preview}\n\n"
-        "El bot no respondió. Responde tú desde Business."
+    pending["user_id"] = user_id
+    texto = _format_escalation_text(
+        esc_id=esc_id,
+        user_id=user_id,
+        username=username,
+        chat_id=chat_id,
+        reason=reason,
+        trigger_text=trigger_text,
+        context=context,
+        pending=pending,
     )
+    teclado = _build_escalation_keyboard(esc_id, pending)
     try:
         await bot.send_message(
             chat_id=DIANA_ADMIN_CHAT_ID,
             text=texto,
+            reply_markup=teclado,
         )
-        log.info(f"Escalación notificada a Diana: {username} ({user_id}) — {reason}")
+        log.info(
+            f"Escalación notificada a Diana: #{esc_id} {username} ({user_id}) — {reason}"
+        )
     except Exception as e:
         log.error(f"notify_diana_escalation error: {e}")
 
@@ -401,7 +531,7 @@ async def notify_diana(
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Maneja callbacks de aprobación (a:) y retroalimentación post-envío (t:)."""
+    """Maneja callbacks de aprobación (a:), escalaciones (e:) y retroalimentación (t:)."""
     cq = update.callback_query
     if not cq or not cq.data:
         return False
@@ -415,7 +545,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ex_id = int(parts[2])
     except ValueError:
         return False
-    if prefix not in ("a", "t"):
+    if prefix not in ("a", "t", "e"):
         return False
 
     admin_id = auth_users.get_admin_id()
@@ -423,7 +553,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await cq.answer("No autorizado")
         return True
 
-    if not (prefix == "a" and action in ("approve", "regen", "prev", "next", "fix", "note")):
+    if not (
+        (prefix == "a" and action in ("approve", "regen", "prev", "next", "fix", "note"))
+        or (prefix == "e" and action in ("valid", "fp", "gen"))
+    ):
         await cq.answer()
 
     # ══ MODO APROBACIÓN (a:) ═══════════════════════════════════════
@@ -603,6 +736,67 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 )
             else:
                 await cq.answer("Última opción")
+
+
+    # ══ TRIAGE DE ESCALACIONES (e:) ══════════════════════════════
+    elif prefix == "e":
+        esc_id = ex_id
+        if esc_id not in pending_escalations:
+            await cq.answer()
+            await cq.edit_message_text("Esta escalación ya expiró o fue procesada.")
+            return True
+        pending = pending_escalations[esc_id]
+
+        if action == "valid":
+            await _clear_awaiting_note_with_prompt_restore(context.bot, cq.from_user.id)
+            pending["verdict"] = "valid"
+            if sandbox.should_persist(pending["chat_id"]) and not sandbox.is_synthetic_id(esc_id):
+                review_escalation(esc_id, "valid")
+            pending_escalations.pop(esc_id, None)
+            _save_runtime_state()
+            await cq.answer("Registrada")
+            await _refresh_escalation_message(
+                cq, esc_id, pending, history.get(pending["chat_id"], []),
+            )
+            log.info(f"Escalación {esc_id} → valid")
+
+        elif action == "fp":
+            await _clear_awaiting_note_with_prompt_restore(context.bot, cq.from_user.id)
+            pending["verdict"] = "false_positive"
+            if sandbox.should_persist(pending["chat_id"]) and not sandbox.is_synthetic_id(esc_id):
+                review_escalation(esc_id, "false_positive")
+            _save_runtime_state()
+            await cq.answer("Falso positivo registrado")
+            await _refresh_escalation_message(
+                cq, esc_id, pending, history.get(pending["chat_id"], []),
+            )
+            log.info(f"Escalación {esc_id} → false_positive")
+
+        elif action == "gen":
+            if pending.get("verdict") != "false_positive":
+                await cq.answer("Marca primero como falso positivo")
+                return True
+            await cq.answer("Generando...")
+            err = await _generate_from_escalation(context.bot, esc_id)
+            if err == "expired":
+                await cq.edit_message_text("Esta escalación ya expiró o fue procesada.")
+            elif err == "not_fp":
+                await cq.answer("Marca primero como falso positivo")
+            elif err == "stale":
+                await cq.edit_message_text(
+                    "No se generó: el chat tiene un mensaje más reciente.",
+                )
+            elif err and err.startswith("llm_fail:"):
+                await cq.edit_message_text(
+                    f"No se pudo generar respuesta: {err.split(':', 1)[1]}",
+                )
+            else:
+                await cq.edit_message_text(
+                    f"Generando borrador para {pending['username']}... "
+                    "Revisa el mensaje de aprobación.",
+                    reply_markup=None,
+                )
+                log.info(f"Escalación {esc_id} → borrador generado")
 
     # ══ MODO AUTÓNOMO — retroalimentación post-envío (t:) ══════════
     elif prefix == "t":

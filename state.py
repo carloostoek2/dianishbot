@@ -50,6 +50,9 @@ reply_gen: dict[int, int] = {}
 # variants[i] = {"response": str, "confidence": int, "topic": str}
 pending_approval: dict[int, dict] = {}
 
+# Escalaciones pendientes de triage: {esc_id: {chat_id, bc_id, username, gen, source, reason, matched, trigger_text, verdict}}
+pending_escalations: dict[int, dict] = {}
+
 # Metadatos de chats observados (no autorizados): {chat_id: {vip_id, username}}
 chat_meta: dict[int, dict] = {}
 
@@ -62,6 +65,8 @@ def _active_chat_ids() -> set[int]:
 
     ids = set(timer_schedule.keys())
     for pending in pending_approval.values():
+        ids.add(pending["chat_id"])
+    for pending in pending_escalations.values():
         ids.add(pending["chat_id"])
     return {cid for cid in ids if not sandbox.is_active(cid)}
 
@@ -88,13 +93,21 @@ def _build_runtime_snapshot() -> dict:
             str(k): v for k, v in pending_approval.items()
             if not sandbox.is_active(v.get("chat_id", 0))
         },
+        "pending_escalations": {
+            str(k): v for k, v in pending_escalations.items()
+            if not sandbox.is_active(v.get("chat_id", 0))
+        },
     }
 
 
 def _save_runtime_state() -> None:
     path = Path(RUNTIME_STATE_FILE)
     snapshot = _build_runtime_snapshot()
-    if not snapshot["timers"] and not snapshot["pending_approval"]:
+    if (
+        not snapshot["timers"]
+        and not snapshot["pending_approval"]
+        and not snapshot["pending_escalations"]
+    ):
         if path.exists():
             try:
                 path.unlink()
@@ -139,10 +152,14 @@ def _load_runtime_state() -> None:
             pending = dict(v)
             pending["regenerating"] = False
             pending_approval[int(k)] = pending
-        if timer_schedule or pending_approval:
+        pending_escalations.clear()
+        for k, v in data.get("pending_escalations", {}).items():
+            pending_escalations[int(k)] = dict(v)
+        if timer_schedule or pending_approval or pending_escalations:
             log.info(
                 f"Runtime restaurado: {len(timer_schedule)} timer(s), "
-                f"{len(pending_approval)} borrador(es)"
+                f"{len(pending_approval)} borrador(es), "
+                f"{len(pending_escalations)} escalación(es)"
             )
     except Exception as e:
         log.error(f"Error cargando runtime: {e}")

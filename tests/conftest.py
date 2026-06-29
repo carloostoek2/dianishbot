@@ -240,6 +240,21 @@ async def test_db(tmp_path):
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS escalation_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            username TEXT,
+            ts TEXT NOT NULL,
+            source TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            matched TEXT,
+            trigger_text TEXT NOT NULL,
+            context TEXT,
+            verdict TEXT,
+            reviewed_at TEXT
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS llm_failures (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             chat_id INTEGER NOT NULL,

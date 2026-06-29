@@ -317,6 +317,8 @@ async def test_escalate_still_notifies_in_sandbox(tmp_path, monkeypatch):
             user_id=999,
             username="vip",
             chat_id=VIP_CHAT_ID,
+            bc_id="bc_test",
+            source="keyword",
             reason="test",
             trigger_text="hola",
             context=[{"role": "user", "content": "hola"}],

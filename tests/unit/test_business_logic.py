@@ -13,6 +13,7 @@ class TestNeedsEscalation:
             ("quiero cancelar mi suscripcion", "Keyword detectada"),
             ("hola todo bien", None),
             ("precio del vip?", "Keyword detectada"),
+            ("te aprecio mucho", None),
             ("", None),
         ],
     )

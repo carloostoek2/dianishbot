@@ -41,6 +41,21 @@ def init_db() -> sqlite3.Connection:
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS escalation_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            username TEXT,
+            ts TEXT NOT NULL,
+            source TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            matched TEXT,
+            trigger_text TEXT NOT NULL,
+            context TEXT,
+            verdict TEXT,
+            reviewed_at TEXT
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS llm_failures (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             chat_id INTEGER NOT NULL,
@@ -276,3 +291,213 @@ def build_few_shot_block(examples: list[dict]) -> str:
         lines.append(f"  Respuesta ideal: {ideal}")
         lines.append("---")
     return "\n".join(lines)
+
+def _normalize_trigger(text: str) -> str:
+    return (text or "").strip().lower()
+
+
+def save_escalation_event(
+    *,
+    chat_id: int,
+    username: str,
+    source: str,
+    reason: str,
+    matched: str,
+    trigger_text: str,
+    context: list[dict],
+) -> int:
+    conn = _require_db()
+    cur = conn.execute(
+        """INSERT INTO escalation_events
+           (chat_id, username, ts, source, reason, matched, trigger_text, context)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (
+            chat_id, username, datetime.now().isoformat(), source, reason, matched,
+            trigger_text, json.dumps(context, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def review_escalation(esc_id: int, verdict: str) -> None:
+    conn = _require_db()
+    conn.execute(
+        """UPDATE escalation_events
+           SET verdict=?, reviewed_at=?
+           WHERE id=?""",
+        (verdict, datetime.now().isoformat(), esc_id),
+    )
+    conn.commit()
+
+
+def get_escalation_false_positives(limit: int = 20) -> list[dict]:
+    if db is None:
+        return []
+    conn = _require_db()
+    rows = conn.execute(
+        """SELECT trigger_text, reason, matched, source
+           FROM escalation_events
+           WHERE verdict='false_positive'
+           ORDER BY id DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    return [
+        {
+            "trigger_text": r[0],
+            "reason": r[1],
+            "matched": r[2],
+            "source": r[3],
+        }
+        for r in rows
+    ]
+
+
+def is_known_false_positive(source: str, matched: str, trigger_text: str) -> bool:
+    if db is None:
+        return False
+    norm = _normalize_trigger(trigger_text)
+    conn = _require_db()
+    rows = conn.execute(
+        """SELECT trigger_text FROM escalation_events
+           WHERE verdict='false_positive' AND source=? AND matched=?
+           ORDER BY id DESC LIMIT 50""",
+        (source, matched),
+    ).fetchall()
+    return any(_normalize_trigger(row[0]) == norm for row in rows)
+
+
+_VERDICT_LABELS = {
+    None: "pendiente",
+    "valid": "correcta",
+    "false_positive": "falso positivo",
+}
+
+
+def get_escalation_stats(days: int = 7) -> dict:
+    """Agrega escalaciones de los últimos N días."""
+    if db is None:
+        return {
+            "days": days,
+            "total": 0,
+            "pending_review": 0,
+            "by_verdict": [],
+            "by_source": [],
+            "by_user": [],
+            "recent": [],
+        }
+    conn = _require_db()
+    since = (datetime.now() - timedelta(days=days)).isoformat()
+
+    total = conn.execute(
+        "SELECT COUNT(*) FROM escalation_events WHERE ts >= ?", (since,),
+    ).fetchone()[0]
+
+    pending_review = conn.execute(
+        """SELECT COUNT(*) FROM escalation_events
+           WHERE ts >= ? AND (verdict IS NULL OR verdict = '')""",
+        (since,),
+    ).fetchone()[0]
+
+    by_verdict = conn.execute(
+        """SELECT COALESCE(verdict, ''), COUNT(*) FROM escalation_events
+           WHERE ts >= ? GROUP BY verdict ORDER BY COUNT(*) DESC""",
+        (since,),
+    ).fetchall()
+
+    by_source = conn.execute(
+        """SELECT source, COUNT(*) FROM escalation_events
+           WHERE ts >= ? GROUP BY source ORDER BY COUNT(*) DESC""",
+        (since,),
+    ).fetchall()
+
+    by_user = conn.execute(
+        """SELECT username, COUNT(*) FROM escalation_events
+           WHERE ts >= ? GROUP BY username ORDER BY COUNT(*) DESC""",
+        (since,),
+    ).fetchall()
+
+    recent = conn.execute(
+        """SELECT id, ts, username, source, matched, trigger_text, verdict
+           FROM escalation_events WHERE ts >= ?
+           ORDER BY id DESC LIMIT 8""",
+        (since,),
+    ).fetchall()
+
+    return {
+        "days": days,
+        "total": total,
+        "pending_review": pending_review,
+        "by_verdict": by_verdict,
+        "by_source": by_source,
+        "by_user": by_user,
+        "recent": recent,
+    }
+
+
+def format_escalation_report(days: int = 7, *, live_pending: int = 0) -> str:
+    stats = get_escalation_stats(days)
+    lines = [f"Escalaciones — últimos {stats['days']} días", "─" * 22]
+
+    if stats["total"] == 0 and live_pending == 0:
+        lines.append("Sin escalaciones registradas en este periodo.")
+        return "\n".join(lines)
+
+    lines.append(f"Total: {stats['total']}")
+    if stats["pending_review"]:
+        lines.append(f"Pendientes de revisión (DB): {stats['pending_review']}")
+    if live_pending:
+        lines.append(f"En cola ahora (sin revisar): {live_pending}")
+
+    if stats["by_verdict"]:
+        lines.append("")
+        lines.append("Por veredicto:")
+        for verdict, count in stats["by_verdict"]:
+            label = _VERDICT_LABELS.get(verdict or None, verdict or "pendiente")
+            lines.append(f"  • {label}: {count}")
+
+    if stats["by_source"]:
+        lines.append("")
+        lines.append("Por fuente:")
+        for source, count in stats["by_source"]:
+            lines.append(f"  • {source}: {count}")
+
+    if stats["by_user"]:
+        lines.append("")
+        lines.append("Por usuario:")
+        for username, count in stats["by_user"]:
+            lines.append(f"  • {username or '?'}: {count}")
+
+    if stats["recent"]:
+        lines.append("")
+        lines.append("Recientes:")
+        for esc_id, ts, username, source, matched, trigger, verdict in stats["recent"]:
+            ts_short = ts[:16].replace("T", " ")
+            vlabel = _VERDICT_LABELS.get(verdict, verdict or "pendiente")
+            snippet = (trigger or "")[:60]
+            lines.append(
+                f"  #{esc_id} {ts_short} | {username or '?'} | {source} | {vlabel}"
+            )
+            if matched:
+                lines.append(f"    match: {matched}")
+            if snippet:
+                lines.append(f"    «{snippet}»")
+
+    return "\n".join(lines)
+
+
+def build_escalation_fp_block(limit: int = 10) -> str:
+    rows = get_escalation_false_positives(limit)
+    if not rows:
+        return ""
+    lines = [
+        "\n\n---\nESCALACIONES MARCADAS COMO FALSO POSITIVO "
+        "(NO volver a escalar en casos similares):"
+    ]
+    for row in rows:
+        snippet = row["trigger_text"][:120]
+        reason = row["reason"][:80]
+        lines.append(f'• "{snippet}" — {reason}')
+    lines.append("---")
+    return "\n".join(lines)
+

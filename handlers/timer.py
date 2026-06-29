@@ -74,24 +74,32 @@ async def auto_reply(
 
     if is_llm_escalation_topic(topic):
         from .business import escalate_to_diana
+        from services.training import is_known_false_positive
 
         msgs = history.get(chat_id, [])
         trigger = next(
             (m["content"] for m in reversed(msgs) if m["role"] == "user"), "",
         )
-        user_id = chat_meta.get(chat_id, {}).get("vip_id", chat_id)
-        reason = f"Tema LLM: '{topic}'"
-        await escalate_to_diana(
-            bot,
-            user_id=user_id,
-            username=username,
-            chat_id=chat_id,
-            reason=reason,
-            trigger_text=trigger,
-            context=msgs,
-        )
-        _finish_timer(chat_id)
-        return
+        if is_known_false_positive("llm", topic, trigger):
+            log.info(
+                f"Escalación LLM omitida — FP conocido para '{topic}' en {username}"
+            )
+        else:
+            user_id = chat_meta.get(chat_id, {}).get("vip_id", chat_id)
+            reason = f"Tema LLM: '{topic}'"
+            await escalate_to_diana(
+                bot,
+                user_id=user_id,
+                username=username,
+                chat_id=chat_id,
+                bc_id=bc_id,
+                source="llm",
+                reason=reason,
+                trigger_text=trigger,
+                context=msgs,
+            )
+            _finish_timer(chat_id)
+            return
 
     from services import sandbox
     if sandbox.is_active(chat_id):

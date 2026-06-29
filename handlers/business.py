@@ -1,12 +1,14 @@
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta
 from telegram.ext import ContextTypes
 from config import ESCALATE_FILE, ESCALATE_KEYWORDS, OBSERVE_UNAUTHORIZED
 import auth_users
 from state import (
-    connections, history, chat_bc, chat_meta, pending_msg, reply_gen, timers,
-    timer_schedule, _clear_timer_schedule, _save_connections_state, _save_runtime_state,
+    connections, history, chat_bc, chat_meta, pending_escalations, pending_msg,
+    reply_gen, timers, timer_schedule, _clear_timer_schedule, _save_connections_state,
+    _save_runtime_state,
 )
 from services.training import save_observed_example
 from .callbacks import notify_diana_escalation
@@ -53,11 +55,34 @@ def _resolve_vip_id(msg) -> int | None:
     return sender_id
 
 
+def _keyword_in_text(kw: str, lower: str) -> bool:
+    if kw.strip() == "ia":
+        return " ia " in f" {lower} "
+    return (
+        re.search(
+            rf"(?<![\wáéíóúñ]){re.escape(kw)}(?![\wáéíóúñ])",
+            lower,
+        )
+        is not None
+    )
+
+
+def _parse_escalation_matched(reason: str) -> str | None:
+    m = re.search(r"'([^']+)'", reason)
+    return m.group(1) if m else None
+
+
 def needs_escalation(text: str) -> str | None:
+    from services.training import is_known_false_positive
+
     lower = text.lower()
     for kw in ESCALATE_KEYWORDS:
-        if kw in lower:
-            return f"Keyword detectada: '{kw}'"
+        if not _keyword_in_text(kw, lower):
+            continue
+        if is_known_false_positive("keyword", kw, text):
+            log.info(f"Escalación omitida — FP conocido para keyword '{kw}'")
+            continue
+        return f"Keyword detectada: '{kw}'"
     return None
 
 
@@ -67,20 +92,55 @@ async def escalate_to_diana(
     user_id: int,
     username: str,
     chat_id: int,
+    bc_id: str,
+    source: str,
     reason: str,
     trigger_text: str,
     context: list[dict],
 ):
+    from services import sandbox
+    from services.training import save_escalation_event
+
+    matched = _parse_escalation_matched(reason) or ""
+    if sandbox.should_persist(chat_id):
+        esc_id = save_escalation_event(
+            chat_id=chat_id,
+            username=username,
+            source=source,
+            reason=reason,
+            matched=matched,
+            trigger_text=trigger_text,
+            context=context,
+        )
+    else:
+        esc_id = sandbox.allocate_draft_id()
+
     log_escalation(user_id, username, reason, context, chat_id=chat_id)
     log.info(f"ESCALADO {username} — {reason}")
+
+    pending_escalations[esc_id] = {
+        "chat_id": chat_id,
+        "bc_id": bc_id,
+        "username": username,
+        "gen": reply_gen.get(chat_id, 0),
+        "source": source,
+        "reason": reason,
+        "matched": matched,
+        "trigger_text": trigger_text,
+        "verdict": None,
+    }
+    _save_runtime_state()
+
     await notify_diana_escalation(
         bot,
+        esc_id=esc_id,
         user_id=user_id,
         username=username,
         chat_id=chat_id,
         reason=reason,
         trigger_text=trigger_text,
         context=context,
+        pending=pending_escalations[esc_id],
     )
 
 
@@ -178,6 +238,8 @@ async def _handle_business_message(
             user_id=vip_id,
             username=username,
             chat_id=chat_id,
+            bc_id=bc_id,
+            source="keyword",
             reason=reason,
             trigger_text=text,
             context=history[chat_id],
