@@ -130,6 +130,7 @@ def _build_main_menu_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("👥 Usuarios VIP", callback_data="au:list")],
         [InlineKeyboardButton("📊 Estado del Bot", callback_data="au:estado")],
         [InlineKeyboardButton("📈 Fallos del LLM", callback_data="au:fallos")],
+        [InlineKeyboardButton("⚠️ Escalaciones", callback_data="au:escalaciones")],
         [InlineKeyboardButton("🤖 Config LLM", callback_data="au:llm")],
         [InlineKeyboardButton("🔍 Trace LLM", callback_data="au:trace")],
         [InlineKeyboardButton("❓ Ayuda", callback_data="au:ayuda")],
@@ -665,6 +666,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _replace_with_fallos(query)
         return True
 
+    if action == "escalaciones":
+        await query.answer()
+        await _replace_with_escalaciones(query)
+        return True
+
     if action == "ayuda":
         await query.answer()
         await _replace_with_ayuda(query)
@@ -1091,6 +1097,34 @@ async def _replace_with_fallos(query) -> None:
     await _edit_or_send(query, report, _build_back_to_menu_keyboard())
 
 
+async def _replace_with_escalaciones(query) -> None:
+    """Muestra reporte de escalaciones inline."""
+    import state
+    from services.training import format_escalation_report
+
+    live_pending = sum(
+        1 for p in state.pending_escalations.values() if not p.get("verdict")
+    )
+    report = format_escalation_report(days=7, live_pending=live_pending)
+    await _edit_or_send(query, report, _build_back_to_menu_keyboard())
+
+
+async def send_escalaciones(bot, chat_id: int, *, days: int = 7) -> None:
+    """Envía reporte de escalaciones (reply keyboard / slash)."""
+    import state
+    from services.training import format_escalation_report
+
+    live_pending = sum(
+        1 for p in state.pending_escalations.values() if not p.get("verdict")
+    )
+    report = format_escalation_report(days=days, live_pending=live_pending)
+    await bot.send_message(
+        chat_id=chat_id,
+        text=report,
+        reply_markup=_build_back_to_menu_keyboard(),
+    )
+
+
 async def _replace_with_ayuda(query) -> None:
     """Muestra referencia de comandos inline."""
     text = (
@@ -1106,6 +1140,7 @@ async def _replace_with_ayuda(query) -> None:
         "*Estado y Monitoreo*\n"
         "`/estado` — Estado actual del bot\n"
         "`/fallos [dias]` — Reporte de fallos del LLM \\(7 dias por defecto\\)\n"
+        "`/escalaciones [dias]` — Historial de escalaciones \\(7 dias por defecto\\)\n"
         "`🤖 Config LLM` — Cambiar proveedor/modelo sin reiniciar\n\n"
         "*Trace y Debug*\n"
         "`/trace on|off|estado` — Activar/desactivar traza global del LLM\n"
@@ -1313,6 +1348,18 @@ async def handle_admin_message(
                 await msg.reply_text("Uso: /fallos [días]  (ej: /fallos 7)")
                 return True
         await msg.reply_text(format_llm_failure_report(days))
+        return True
+
+    if msg.text and msg.text.startswith("/escalaciones"):
+        parts = msg.text.split()
+        days = 7
+        if len(parts) > 1:
+            try:
+                days = max(1, min(int(parts[1]), 90))
+            except ValueError:
+                await msg.reply_text("Uso: /escalaciones [días]  (ej: /escalaciones 7)")
+                return True
+        await send_escalaciones(context.bot, msg.chat_id, days=days)
         return True
 
     if msg.text and msg.text.startswith("/trace"):

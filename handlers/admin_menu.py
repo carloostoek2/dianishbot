@@ -22,7 +22,7 @@ log = logging.getLogger("diana")
 _MAIN_BUTTONS = [
     ["📋 Menu", "👥 Usuarios"],
     ["📊 Estado", "📈 Fallos"],
-    ["🤖 LLM"],
+    ["⚠️ Escalaciones", "🤖 LLM"],
     ["❓ Ayuda"],
 ]
 
@@ -45,6 +45,7 @@ _MENU_TEXT_MAP: dict[str, str] = {
     "Usuarios": "usuarios",
     "Estado": "estado",
     "Fallos": "fallos",
+    "Escalaciones": "escalaciones",
     "LLM": "llm",
     "Ayuda": "ayuda",
 }
@@ -115,6 +116,10 @@ async def _route_menu_action(action: str, msg, context: ContextTypes.DEFAULT_TYP
         from services.training import format_llm_failure_report
         report = format_llm_failure_report(days=7)
         await msg.reply_text(report, reply_markup=auth_users._build_back_to_menu_keyboard())
+        return True
+
+    if action == "escalaciones":
+        await auth_users.send_escalaciones(context.bot, msg.chat_id, days=7)
         return True
 
     if action == "ayuda":
