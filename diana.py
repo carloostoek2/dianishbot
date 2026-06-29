@@ -23,7 +23,6 @@ from config import (
     ANTHROPIC_KEY,
     DEEPSEEK_KEY,
     DIANA_ADMIN_CHAT_ID,
-    DIANA_SYSTEM_PROMPT,
     ESCALATE_FILE,
     ESCALATE_KEYWORDS,
     LOG_FILE,
@@ -103,6 +102,13 @@ def main():
     global db, memory_service
 
     llm_settings.init()
+
+    from config import load_system_prompt
+    try:
+        prompt = load_system_prompt()
+    except (FileNotFoundError, ValueError) as e:
+        raise SystemExit(str(e))
+    log.info(f"System prompt cargado ({len(prompt)} chars)")
 
     from services import sandbox
     sandbox.init()

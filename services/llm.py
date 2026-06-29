@@ -12,7 +12,7 @@ from config import (
     ANTHROPIC_VERSION,
     DEEPSEEK_KEY,
     DEEPSEEK_URL,
-    DIANA_SYSTEM_PROMPT,
+    get_system_prompt,
     LLM_MAX_RETRIES,
     LLM_RETRY_DELAY_SEC,
     MAX_HISTORY,
@@ -397,8 +397,9 @@ async def get_diana_response(
             "IMPORTANTE: Diana revisó este mensaje y NO requiere escalación. "
             "Responde con normalidad; topic NO debe ser escalado_humano ni escalado.\n---"
         )
+    base_prompt = get_system_prompt()
     system = (
-        DIANA_SYSTEM_PROMPT + temporal_block + memory_block + few_shots
+        base_prompt + temporal_block + memory_block + few_shots
         + escalation_fp_block + no_escalation_block + """
 ---
 FORMATO OBLIGATORIO: responde ÚNICAMENTE con JSON válido, sin texto extra ni backticks.
@@ -456,7 +457,7 @@ REGLAS CRÍTICAS DE ESTILO (prioridad máxima):
             "auto_facts": _trace_auto_facts,
             "few_shot_count": len(examples),
             "few_shot_topic": topic_guess,
-            "system_prompt_len": len(DIANA_SYSTEM_PROMPT),
+            "system_prompt_len": len(base_prompt),
             "history_msg_count": len(convo),
             "history_chars": sum(len(m.get("content", "")) for m in convo),
         }

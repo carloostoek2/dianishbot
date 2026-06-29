@@ -8,7 +8,10 @@ Use real telegram.* objects where possible + AsyncMock for Bot interactions.
 import pytest
 import pytest_asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+
+import config
 
 from telegram import (
     Bot,
@@ -19,6 +22,21 @@ from telegram import (
     CallbackQuery,
 )
 from telegram.ext import ContextTypes
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_system_prompt_file():
+    """Crea un prompt mínimo si no existe (p. ej. en CI sin el archivo local)."""
+    path = Path(config.SYSTEM_PROMPT_FILE)
+    created = False
+    if not path.is_file():
+        path.write_text("Eres Diana. Responde en español.", encoding="utf-8")
+        created = True
+    config.load_system_prompt(force=True)
+    yield
+    config.reset_system_prompt_cache()
+    if created:
+        path.unlink(missing_ok=True)
 
 
 @pytest.fixture
