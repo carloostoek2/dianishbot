@@ -368,7 +368,12 @@ async def cmd_backfill_vips(args: argparse.Namespace) -> None:
                 continue
             print(f"\n→ Backfill VIP {user_id} ...")
             try:
-                messages, name = await fetch_vip_history(user_id, msg_limit)
+                entry = auth_users.get_user_entry(user_id) or {}
+                messages, name = await fetch_vip_history(
+                    user_id,
+                    msg_limit,
+                    username=entry.get("username"),
+                )
                 print(f"  Obtenidos: {len(messages)} mensajes ({name})")
                 n = chat_history_mod.seed_chat_history(
                     user_id,

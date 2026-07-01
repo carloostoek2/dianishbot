@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import auth_users
+import state
 from config import (
     BACKFILL_INTERVAL_SEC,
     BACKFILL_MSG_LIMIT,
@@ -97,8 +98,10 @@ _SESSION_PERMANENT_MARKERS = (
 def is_permanent_error(exc: BaseException) -> bool:
     """True for unrecoverable entity/user/session errors (do not re-enqueue)."""
     name = type(exc).__name__
+    msg = str(exc).lower()
+    if auth_users.is_retriable_seed_error(str(exc)):
+        return False
     permanent_names = {
-        "ValueError",
         "PeerIdInvalidError",
         "InputUserDeactivatedError",
         "UserIdInvalidError",
@@ -109,8 +112,25 @@ def is_permanent_error(exc: BaseException) -> bool:
         return True
     if any(marker in name for marker in _SESSION_PERMANENT_MARKERS):
         return True
-    msg = str(exc).lower()
-    return "could not find" in msg or "no user has" in msg
+    if name == "ValueError":
+        return True
+    return "no user has" in msg
+
+
+def _seed_defer_reason(user_id: int) -> str | None:
+    """Why seed_chat_history returned 0 despite Telethon data (for worker messaging)."""
+    from services import sandbox
+
+    if load_chat_history(user_id):
+        return None
+    if sandbox.is_active(user_id):
+        return "sandbox activo — reencolado al final"
+    ram_msgs = state.history.get(user_id) or []
+    if ram_msgs:
+        if sandbox.should_persist(user_id):
+            return "historial en vivo persistido (RAM→DB)"
+        return "historial en RAM (sandbox)"
+    return None
 
 
 def should_mark_history_seeded(
@@ -124,6 +144,11 @@ def should_mark_history_seeded(
     if load_chat_history(user_id):
         return True
     if telethon_message_count == 0:
+        return True
+    from services import sandbox
+
+    ram_msgs = state.history.get(user_id) or []
+    if ram_msgs and sandbox.should_persist(user_id):
         return True
     return False
 
@@ -239,11 +264,18 @@ async def _process_one(app) -> None:
     permanent = False
     reenqueue = False
 
+    entry = auth_users.get_user_entry(user_id) or {}
+    vip_username = entry.get("username")
+
     async with _session_lock:
         try:
             from services.telethon_import import fetch_vip_history
 
-            messages, entity_name = await fetch_vip_history(user_id, BACKFILL_MSG_LIMIT)
+            messages, entity_name = await fetch_vip_history(
+                user_id,
+                BACKFILL_MSG_LIMIT,
+                username=vip_username,
+            )
             display_name = entity_name or display_name
             seeded_count = seed_chat_history(user_id, messages)
             telethon_count = len(messages)
@@ -252,6 +284,15 @@ async def _process_one(app) -> None:
                 auth_users.mark_history_seeded(user_id)
                 if seeded_count:
                     detail = f"{seeded_count} mensaje(s) sembrados"
+                elif load_chat_history(user_id):
+                    defer = _seed_defer_reason(user_id)
+                    if defer and "RAM→DB" in defer:
+                        detail = (
+                            f"historial en vivo guardado "
+                            f"({len(load_chat_history(user_id))} msgs en DB)"
+                        )
+                    else:
+                        detail = "historial ya existía (skip-if-nonempty)"
                 elif telethon_count:
                     detail = "historial ya existía (skip-if-nonempty)"
                 else:
@@ -274,26 +315,34 @@ async def _process_one(app) -> None:
                     pending_count(),
                 )
             else:
-                err_text = "seed omitido: historial en RAM o sandbox activo"
+                defer = _seed_defer_reason(user_id) or "seed omitido (RAM/sandbox)"
+                err_text = defer
                 reenqueue = True
                 log.warning(
-                    "Backfill seed omitido para %s (RAM/sandbox) — reencolar",
+                    "Backfill seed omitido para %s (%s) — reencolar",
                     user_id,
+                    defer,
                 )
-                try:
-                    await _notify_backfill_result(
-                        app.bot,
+                if "sandbox" in defer.lower():
+                    log.info(
+                        "Backfill diferido para %s — sin notificación DM (sandbox)",
                         user_id,
-                        display_name,
-                        False,
-                        "Seed omitido (RAM/sandbox) — reencolado al final",
                     )
-                except Exception as notify_err:
-                    log.error(
-                        "Error notificando backfill omitido para %s: %s",
-                        user_id,
-                        notify_err,
-                    )
+                else:
+                    try:
+                        await _notify_backfill_result(
+                            app.bot,
+                            user_id,
+                            display_name,
+                            False,
+                            f"Seed omitido — {defer}",
+                        )
+                    except Exception as notify_err:
+                        log.error(
+                            "Error notificando backfill omitido para %s: %s",
+                            user_id,
+                            notify_err,
+                        )
         except Exception as e:
             err_text = f"{type(e).__name__}: {e}"
             log.warning("Backfill falló para %s: %s", user_id, err_text)

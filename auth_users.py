@@ -112,19 +112,37 @@ def mark_history_seeded(user_id: int, *, error: str | None = None) -> None:
     _save()
 
 
+def is_retriable_seed_error(error: str | None) -> bool:
+    """Entity-resolution failures may succeed after cache/dialog refresh."""
+    if not error:
+        return False
+    low = error.lower()
+    return "could not find" in low or "could not resolve" in low
+
+
+def get_user_entry(user_id: int) -> dict | None:
+    _reload_if_changed()
+    return _users.get(str(user_id))
+
+
 def get_users_needing_backfill() -> list[int]:
     """Authorized VIPs without history_seeded_at (missing field = needs backfill)."""
     return [
         int(uid)
         for uid, entry in _users.items()
         if not entry.get("history_seeded_at")
+        or is_retriable_seed_error(entry.get("history_seed_error"))
     ]
 
 
 def is_history_seeded(user_id: int) -> bool:
     """True if user entry has history_seeded_at set."""
     entry = _users.get(str(user_id))
-    return bool(entry and entry.get("history_seeded_at"))
+    if not entry or not entry.get("history_seeded_at"):
+        return False
+    if is_retriable_seed_error(entry.get("history_seed_error")):
+        return False
+    return True
 
 
 def _display_name(entry: dict) -> str:

@@ -4,7 +4,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from services.telethon_import import fetch_all_messages, messages_to_history
+from services.telethon_import import (
+    fetch_all_messages,
+    messages_to_history,
+    resolve_vip_entity,
+)
 
 
 def test_messages_to_history_maps_diana_as_assistant():
@@ -105,3 +109,36 @@ async def test_fetch_all_messages_reraises_floodwait_after_max_retries(monkeypat
     with pytest.raises(FloodWaitError):
         await fetch_all_messages(client, MagicMock(), limit=10)
     assert attempts[0] == 6
+
+
+@pytest.mark.asyncio
+async def test_resolve_vip_entity_falls_back_to_dialog_scan():
+    client = MagicMock()
+    client.get_entity = AsyncMock(side_effect=ValueError("cache miss"))
+    dialog_entity = MagicMock(id=42, first_name="VIP")
+
+    async def iter_dialogs():
+        yield MagicMock(entity=dialog_entity, id=42, name="VIP")
+
+    client.iter_dialogs = iter_dialogs
+
+    entity = await resolve_vip_entity(client, 42, username="vipuser")
+    assert entity is dialog_entity
+
+
+@pytest.mark.asyncio
+async def test_resolve_vip_entity_tries_username_before_dialogs():
+    client = MagicMock()
+    user_entity = MagicMock(id=42, first_name="VIP")
+
+    async def get_entity(spec):
+        if spec == "@vipuser":
+            return user_entity
+        raise ValueError("cache miss")
+
+    client.get_entity = get_entity
+    client.iter_dialogs = MagicMock()
+
+    entity = await resolve_vip_entity(client, 42, username="vipuser")
+    assert entity is user_entity
+    client.iter_dialogs.assert_not_called()

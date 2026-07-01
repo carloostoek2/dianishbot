@@ -40,13 +40,13 @@ def test_seed_chat_history_skips_when_db_nonempty(chat_history_db):
     assert chat_history.load_chat_history(1)[-1]["content"] == "live"
 
 
-def test_seed_chat_history_skips_when_ram_nonempty(chat_history_db):
+def test_seed_chat_history_flushes_ram_to_db_when_db_empty(chat_history_db):
     _clear_ram()
-    state.history[5] = [{"role": "user", "content": "sandbox-live"}]
+    state.history[5] = [{"role": "user", "content": "live-msg"}]
     n = chat_history.seed_chat_history(5, [{"role": "user", "content": "seed"}])
     assert n == 0
-    assert state.history[5][0]["content"] == "sandbox-live"
-    assert chat_history.load_chat_history(5) == []
+    assert state.history[5][0]["content"] == "live-msg"
+    assert chat_history.load_chat_history(5)[0]["content"] == "live-msg"
 
 
 def test_seed_chat_history_skips_db_in_sandbox(chat_history_db, tmp_path):

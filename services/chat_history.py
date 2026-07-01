@@ -128,11 +128,29 @@ def seed_chat_history(chat_id: int, messages: list[dict], *, overwrite: bool = F
             return 0
         ram_msgs = state.history.get(chat_id) or []
         if ram_msgs:
-            log.info(
-                "seed_chat_history: skip chat_id=%s (%s mensajes en RAM)",
-                chat_id,
-                len(ram_msgs),
-            )
+            from services import sandbox
+
+            if sandbox.should_persist(chat_id) and db is not None:
+                conn = _require_db()
+                trimmed_ram = _trim(list(ram_msgs))
+                conn.execute(
+                    "INSERT OR REPLACE INTO chat_history (chat_id, messages, updated_at) "
+                    "VALUES (?, ?, ?)",
+                    (chat_id, _serialize(trimmed_ram), datetime.now().isoformat()),
+                )
+                conn.commit()
+                state.history[chat_id] = list(trimmed_ram)
+                log.info(
+                    "seed_chat_history: flush RAM→DB chat_id=%s (%s mensajes)",
+                    chat_id,
+                    len(trimmed_ram),
+                )
+            else:
+                log.info(
+                    "seed_chat_history: skip chat_id=%s (%s mensajes en RAM)",
+                    chat_id,
+                    len(ram_msgs),
+                )
             return 0
         from services import sandbox
 

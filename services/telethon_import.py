@@ -127,7 +127,45 @@ def get_entity_name(entity) -> str:
     )
 
 
-async def fetch_vip_history(user_id: int, limit: int) -> tuple[list[dict], str]:
+async def resolve_vip_entity(
+    client,
+    user_id: int,
+    *,
+    username: str | None = None,
+) -> object:
+    """Resolve a VIP user entity with cache-miss fallbacks.
+
+    Telethon raises ValueError when the session cache lacks access_hash for a
+    bare user_id. Fall back to @username and dialog scan before giving up.
+    """
+    errors: list[str] = []
+
+    for spec in (user_id, f"@{username}" if username else None):
+        if spec is None:
+            continue
+        try:
+            return await client.get_entity(spec)
+        except Exception as e:
+            errors.append(f"{spec}: {type(e).__name__}: {e}")
+
+    async for dialog in client.iter_dialogs():
+        entity = dialog.entity
+        if getattr(entity, "id", None) == user_id:
+            return entity
+
+    detail = "; ".join(errors) if errors else "sin intentos previos"
+    raise ValueError(
+        f"Could not resolve VIP entity user_id={user_id} "
+        f"(username={username!r}). {detail}"
+    )
+
+
+async def fetch_vip_history(
+    user_id: int,
+    limit: int,
+    *,
+    username: str | None = None,
+) -> tuple[list[dict], str]:
     """Connect → fetch → convert → disconnect. Propagates FloodWaitError."""
     from telethon import TelegramClient
 
@@ -135,7 +173,7 @@ async def fetch_vip_history(user_id: int, limit: int) -> tuple[list[dict], str]:
     client = TelegramClient(SESSION_NAME, api_id, api_hash)
     try:
         await client.start()
-        entity = await client.get_entity(user_id)
+        entity = await resolve_vip_entity(client, user_id, username=username)
         name = get_entity_name(entity)
         msgs = await fetch_all_messages(client, entity, limit)
         history = messages_to_history(msgs)

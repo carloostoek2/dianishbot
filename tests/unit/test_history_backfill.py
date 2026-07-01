@@ -1,6 +1,7 @@
 """Tests for services/history_backfill.py queue + worker hooks."""
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -106,12 +107,10 @@ async def test_worker_notifies_admin_on_failure(monkeypatch, chat_history_db, tm
 
     app.bot.send_message.assert_awaited_once()
     call_kw = app.bot.send_message.await_args.kwargs
-    assert "falló" in call_kw["text"].lower() or "permanente" in call_kw["text"].lower()
-    assert auth_users.is_history_seeded(42)
-    users = json.loads((tmp_path / "authorized.json").read_text(encoding="utf-8"))
-    assert "history_seed_error" in users["users"]["42"]
+    assert "falló" in call_kw["text"].lower() or "reencolado" in call_kw["text"].lower()
+    assert not auth_users.is_history_seeded(42)
     q = history_backfill._load_queue()
-    assert 42 not in q["pending"]
+    assert 42 in q["pending"]
 
 
 @pytest.mark.asyncio
@@ -247,9 +246,9 @@ def test_remove_user_dequeues_and_clears_history(tmp_path, chat_history_db, monk
 
 
 @pytest.mark.asyncio
-async def test_worker_does_not_mark_seeded_when_ram_skip_blocks_db(chat_history_db):
+async def test_worker_marks_seeded_when_ram_flushed_to_db(chat_history_db):
     auth_users.add_user(91, "vip", "V")
-    state.history[91] = [{"role": "user", "content": "sandbox-live"}]
+    state.history[91] = [{"role": "user", "content": "live-msg"}]
     history_backfill.enqueue(91)
     app = MagicMock()
     app.bot = AsyncMock()
@@ -264,11 +263,39 @@ async def test_worker_does_not_mark_seeded_when_ram_skip_blocks_db(chat_history_
     ):
         await history_backfill._process_one(app)
 
+    assert auth_users.is_history_seeded(91)
+    assert chat_history.load_chat_history(91)[0]["content"] == "live-msg"
+    q = history_backfill._load_queue()
+    assert 91 not in q["pending"]
+
+
+@pytest.mark.asyncio
+async def test_worker_defers_sandbox_without_dm_notification(chat_history_db, tmp_path):
+    from services import sandbox
+
+    profiles_file = tmp_path / "sandbox_profiles.json"
+    src = Path(__file__).resolve().parents[2] / "diana_sandbox_profiles.json"
+    profiles_file.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    sandbox.configure(profiles_file=str(profiles_file))
+    sandbox._active[91] = "nuevo"
+
+    auth_users.add_user(91, "vip", "V")
+    history_backfill.enqueue(91)
+    app = MagicMock()
+    app.bot = AsyncMock()
+
+    fetched = [{"role": "user", "content": "telethon msg"}]
+    with patch(
+        "services.telethon_import.fetch_vip_history",
+        return_value=(fetched, "VIP"),
+    ):
+        await history_backfill._process_one(app)
+
     assert not auth_users.is_history_seeded(91)
-    assert chat_history.load_chat_history(91) == []
-    assert state.history[91][0]["content"] == "sandbox-live"
+    app.bot.send_message.assert_not_awaited()
     q = history_backfill._load_queue()
     assert 91 in q["pending"]
+    sandbox._active.clear()
 
 
 def test_add_user_already_reenqueues_if_unseeded(tmp_path, monkeypatch):
@@ -296,6 +323,28 @@ def test_add_user_already_reenqueues_if_unseeded(tmp_path, monkeypatch):
 def test_is_permanent_error_session_errors(exc_name):
     exc = type(exc_name, (Exception,), {})()
     assert history_backfill.is_permanent_error(exc) is True
+
+
+def test_is_history_seeded_false_for_retriable_entity_error(tmp_path):
+    users_file = tmp_path / "authorized.json"
+    users_file.write_text(
+        json.dumps({
+            "users": {
+                "42": {
+                    "id": 42,
+                    "history_seeded_at": "2026-01-01T00:00:00+00:00",
+                    "history_seed_error": (
+                        "ValueError: Could not find the input entity "
+                        "for PeerUser(user_id=42)"
+                    ),
+                }
+            }
+        }),
+        encoding="utf-8",
+    )
+    auth_users.configure(users_file=str(users_file), max_users=10, seed_user_ids=[])
+    assert not auth_users.is_history_seeded(42)
+    assert 42 in auth_users.get_users_needing_backfill()
 
 
 def test_get_few_shots_unaffected_by_seed(chat_history_db, in_memory_training_db):
