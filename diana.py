@@ -90,6 +90,9 @@ logging.basicConfig(
         logging.StreamHandler(),
     ],
 )
+# PTB v21+ usa httpx — sin esto cada getUpdates llena el log con "HTTP/1.1 200 OK"
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("diana")
 
 
