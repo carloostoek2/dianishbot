@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -58,6 +59,16 @@ chat_meta: dict[int, dict] = {}
 
 # ID de Diana — se resuelve al activar business_connection
 diana_user_id: int | None = None
+
+# Per-chat locks for history / pending_approval writes
+_chat_locks: dict[int, asyncio.Lock] = {}
+
+
+@asynccontextmanager
+async def chat_write_lock(chat_id: int):
+    lock = _chat_locks.setdefault(chat_id, asyncio.Lock())
+    async with lock:
+        yield
 
 
 def _active_chat_ids() -> set[int]:

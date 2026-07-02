@@ -6,7 +6,7 @@ from config import (
     CONFIDENCE_THRESHOLD, is_llm_escalation_topic,
 )
 from state import (
-    history, reply_gen, timers, pending_approval, chat_meta,
+    chat_write_lock, history, reply_gen, timers, pending_approval, chat_meta,
     _clear_timer_schedule, _save_runtime_state,
 )
 from services.llm import FAIL_ABORTED, get_diana_response, raw_call
@@ -115,19 +115,20 @@ async def auto_reply(
     )
 
     if APPROVAL_MODE:
-        pending_approval[example_id] = {
-            "chat_id": chat_id,
-            "bc_id": bc_id,
-            "username": username,
-            "gen": gen,
-            "variants": [
-                {"response": response, "confidence": confidence, "topic": topic},
-            ],
-            "selected": 0,
-            "regenerating": False,
-        }
-        _clear_timer_schedule(chat_id)
-        _save_runtime_state()
+        async with chat_write_lock(chat_id):
+            pending_approval[example_id] = {
+                "chat_id": chat_id,
+                "bc_id": bc_id,
+                "username": username,
+                "gen": gen,
+                "variants": [
+                    {"response": response, "confidence": confidence, "topic": topic},
+                ],
+                "selected": 0,
+                "regenerating": False,
+            }
+            _clear_timer_schedule(chat_id)
+            _save_runtime_state()
         await notify_diana_approval(
             bot, example_id, username, history.get(chat_id, []),
             response, confidence, topic,

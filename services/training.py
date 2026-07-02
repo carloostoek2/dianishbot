@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timedelta
 
 from config import DB_FILE, MAX_FEW_SHOTS, SKIP_OBSERVED_TOPICS
-from services.llm import failure_label
+from services.llm_errors import failure_label
 
 import logging
 log = logging.getLogger("diana")

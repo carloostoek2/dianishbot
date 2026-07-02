@@ -43,5 +43,4 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "⚠️ Error al procesar. Intenta de nuevo.", show_alert=True
             )
     except Exception:
-        # Si ni siquiera podemos responder, al menos no rompemos más.
-        pass
+        logger.warning("error_handler: no se pudo notificar al usuario", exc_info=True)

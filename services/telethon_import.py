@@ -55,7 +55,7 @@ async def _message_to_record(msg, diana_id: int, entity) -> dict:
         if sender:
             sender_name = get_display_name(sender)
     except Exception:
-        pass
+        log.debug("get_sender falló, usando Unknown", exc_info=True)
 
     return {
         "id": msg.id,

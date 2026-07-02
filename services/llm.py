@@ -19,6 +19,17 @@ from config import (
     TOPIC_MAP,
 )
 from services import llm_settings
+from services.llm_errors import (
+    FAIL_ABORTED,
+    FAIL_EMPTY_API,
+    FAIL_EMPTY_RESPONSE,
+    FAIL_EXHAUSTED,
+    FAIL_HTTP,
+    FAIL_INVALID_JSON,
+    FAIL_NETWORK,
+    FAIL_NO_HISTORY,
+    failure_label,
+)
 from services.schedule import build_temporal_context_block
 from state import history
 
@@ -27,15 +38,21 @@ log = logging.getLogger("diana")
 # wired at runtime from diana main (for memory injection)
 memory_service = None
 
-# Códigos de fallo del LLM (para logs y notificaciones a Diana)
-FAIL_NO_HISTORY = "sin_historial"
-FAIL_ABORTED = "cancelado_mensaje_nuevo"
-FAIL_HTTP = "error_http_api"
-FAIL_NETWORK = "error_red"
-FAIL_EMPTY_API = "api_respuesta_vacia"
-FAIL_INVALID_JSON = "json_invalido"
-FAIL_EMPTY_RESPONSE = "campo_response_vacio"
-FAIL_EXHAUSTED = "reintentos_agotados"
+# Re-export for backward compat (consumers import from services.llm)
+__all__ = [
+    "FAIL_ABORTED",
+    "FAIL_EMPTY_API",
+    "FAIL_EMPTY_RESPONSE",
+    "FAIL_EXHAUSTED",
+    "FAIL_HTTP",
+    "FAIL_INVALID_JSON",
+    "FAIL_NETWORK",
+    "FAIL_NO_HISTORY",
+    "LLMFailure",
+    "failure_label",
+    "get_diana_response",
+    "raw_call",
+]
 
 
 @dataclass(frozen=True)
@@ -43,18 +60,6 @@ class LLMFailure:
     reason: str
     attempts: int
     detail: str
-
-
-_REASON_LABELS = {
-    FAIL_NO_HISTORY: "sin mensajes en el historial",
-    FAIL_ABORTED: "cancelado (llegó un mensaje nuevo)",
-    FAIL_HTTP: "error HTTP de la API del LLM",
-    FAIL_NETWORK: "error de red o timeout",
-    FAIL_EMPTY_API: "el LLM devolvió contenido vacío",
-    FAIL_INVALID_JSON: "respuesta no es JSON válido",
-    FAIL_EMPTY_RESPONSE: "JSON válido pero campo response vacío",
-    FAIL_EXHAUSTED: "agotados los reintentos",
-}
 
 DIANA_RESPONSE_SCHEMA = {
     "type": "object",
@@ -108,10 +113,6 @@ def _anthropic_output_config(response_format: dict | None) -> dict | None:
         return None
     schema = response_format.get("schema") or MEMORY_FACTS_SCHEMA
     return {"format": {"type": "json_schema", "schema": schema}}
-
-
-def failure_label(reason: str) -> str:
-    return _REASON_LABELS.get(reason, reason)
 
 
 def _parse_confidence(value) -> int:

@@ -747,7 +747,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         try:
             await query.message.delete()
         except Exception:
-            pass
+            log.warning("ocultar: no se pudo borrar mensaje admin", exc_info=True)
         return True
 
     if action == "llm":

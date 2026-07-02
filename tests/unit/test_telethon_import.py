@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from services.telethon_import import (
+    _message_to_record,
     fetch_all_messages,
     messages_to_history,
     resolve_vip_entity,
@@ -124,6 +125,26 @@ async def test_resolve_vip_entity_falls_back_to_dialog_scan():
 
     entity = await resolve_vip_entity(client, 42, username="vipuser")
     assert entity is dialog_entity
+
+
+@pytest.mark.asyncio
+async def test_message_to_record_logs_debug_when_get_sender_fails(caplog):
+    class _BrokenMsg:
+        id = 1
+        text = "hola"
+        out = False
+        sender_id = 2
+        date = None
+        media = None
+
+        async def get_sender(self):
+            raise RuntimeError("network down")
+
+    with caplog.at_level("DEBUG", logger="diana"):
+        rec = await _message_to_record(_BrokenMsg(), diana_id=999, entity=MagicMock(id=42))
+
+    assert rec["sender_name"] == "Unknown"
+    assert any("get_sender falló" in r.message for r in caplog.records)
 
 
 @pytest.mark.asyncio
