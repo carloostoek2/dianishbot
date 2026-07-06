@@ -23,7 +23,7 @@ async def test_retries_on_empty_response_then_succeeds(in_memory_training_db):
     ]
 
     with patch.object(llm_mod, "raw_call", new_callable=AsyncMock) as mock_raw:
-        mock_raw.side_effect = [(p, None) for p in payloads]
+        mock_raw.side_effect = [(p, None, None) for p in payloads]
         with patch("services.llm.asyncio.sleep", new_callable=AsyncMock):
             response, confidence, topic, failure = await llm_mod.get_diana_response(
                 42, max_retries=2, retry_delay_sec=0,
@@ -41,7 +41,8 @@ async def test_returns_none_after_exhausted_retries(in_memory_training_db):
     history[99] = [{"role": "user", "content": "precio?"}]
 
     with patch.object(
-        llm_mod, "raw_call", new_callable=AsyncMock, return_value=(None, "error_http_api"),
+        llm_mod, "raw_call", new_callable=AsyncMock,
+        return_value=(None, "error_http_api", "HTTP 503"),
     ) as mock_raw:
         with patch("services.llm.asyncio.sleep", new_callable=AsyncMock):
             response, confidence, topic, failure = await llm_mod.get_diana_response(
@@ -53,7 +54,32 @@ async def test_returns_none_after_exhausted_retries(in_memory_training_db):
     assert topic == "precio"
     assert failure is not None
     assert failure.reason == "error_http_api"
+    assert failure.detail == "HTTP 503"
     assert mock_raw.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_propagates_empty_api_detail_after_retries(in_memory_training_db):
+    history[77] = [{"role": "user", "content": "hola"}]
+    api_detail = (
+        "model=deepseek-v4-flash; finish_reason=insufficient_system_resource; "
+        "usage={'prompt_tokens': 90, 'completion_tokens': 0}"
+    )
+
+    with patch.object(
+        llm_mod, "raw_call", new_callable=AsyncMock,
+        return_value=(None, "api_respuesta_vacia", api_detail),
+    ) as mock_raw:
+        with patch("services.llm.asyncio.sleep", new_callable=AsyncMock):
+            response, confidence, topic, failure = await llm_mod.get_diana_response(
+                77, max_retries=2, retry_delay_sec=0,
+            )
+
+    assert response is None
+    assert failure is not None
+    assert failure.reason == "api_respuesta_vacia"
+    assert failure.detail == api_detail
+    assert mock_raw.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -66,7 +92,8 @@ async def test_aborts_retry_when_should_abort_returns_true(in_memory_training_db
         return abort_after["count"] > 1
 
     with patch.object(
-        llm_mod, "raw_call", new_callable=AsyncMock, return_value=(None, "error_http_api"),
+        llm_mod, "raw_call", new_callable=AsyncMock,
+        return_value=(None, "error_http_api", "HTTP 503"),
     ) as mock_raw:
         with patch("services.llm.asyncio.sleep", new_callable=AsyncMock):
             response, confidence, topic, failure = await llm_mod.get_diana_response(
@@ -91,7 +118,7 @@ async def test_retries_on_invalid_json_then_succeeds(in_memory_training_db):
     ]
 
     with patch.object(llm_mod, "raw_call", new_callable=AsyncMock) as mock_raw:
-        mock_raw.side_effect = [(p, None) for p in payloads]
+        mock_raw.side_effect = [(p, None, None) for p in payloads]
         with patch("services.llm.asyncio.sleep", new_callable=AsyncMock):
             response, confidence, topic, failure = await llm_mod.get_diana_response(
                 55, max_retries=2, retry_delay_sec=0,
@@ -110,7 +137,7 @@ async def test_recovers_truncated_json(in_memory_training_db):
     truncated = '{"response": "Holis bien y tu como andas? bonito vie'
 
     with patch.object(
-        llm_mod, "raw_call", new_callable=AsyncMock, return_value=(truncated, None),
+        llm_mod, "raw_call", new_callable=AsyncMock, return_value=(truncated, None, None),
     ):
         response, confidence, topic, failure = await llm_mod.get_diana_response(
             88, max_retries=1, retry_delay_sec=0,

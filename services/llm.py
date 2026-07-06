@@ -149,6 +149,62 @@ def _strip_thinking_markers(raw: str) -> str:
     return cleaned.strip()
 
 
+def _clip_detail(text: str, max_len: int = 400) -> str:
+    compact = " ".join(str(text).split())
+    if len(compact) <= max_len:
+        return compact
+    return compact[: max_len - 1] + "…"
+
+
+def _extract_deepseek_message_text(message: dict) -> tuple[str | None, str | None]:
+    """Devuelve (texto usable, fuente). Usa reasoning_content si content viene vacío."""
+    content = (message.get("content") or "").strip()
+    if content:
+        return content, None
+    reasoning = (message.get("reasoning_content") or "").strip()
+    if not reasoning:
+        return None, None
+    cleaned = _strip_thinking_markers(reasoning)
+    if cleaned:
+        return cleaned, "reasoning_content"
+    return None, None
+
+
+def _format_deepseek_empty_detail(data: dict, *, model: str) -> str:
+    choices = data.get("choices") or []
+    choice = choices[0] if choices else {}
+    message = choice.get("message") or {}
+    parts: list[str] = [f"model={model}"]
+    finish = choice.get("finish_reason")
+    if finish:
+        parts.append(f"finish_reason={finish}")
+    reasoning = (message.get("reasoning_content") or "").strip()
+    if reasoning:
+        parts.append(f"reasoning_content={_clip_detail(reasoning, 200)}")
+    usage = data.get("usage")
+    if usage:
+        parts.append(f"usage={usage}")
+    if not choices:
+        parts.append(f"body={_clip_detail(json.dumps(data, ensure_ascii=False), 150)}")
+    return "; ".join(parts)
+
+
+def _format_anthropic_empty_detail(data: dict, *, model: str) -> str:
+    parts: list[str] = [f"model={model}"]
+    stop = data.get("stop_reason")
+    if stop:
+        parts.append(f"stop_reason={stop}")
+    blocks = data.get("content") or []
+    if blocks:
+        parts.append(f"blocks={[b.get('type') for b in blocks]}")
+    for block in blocks:
+        text = (block.get("text") or "").strip()
+        if text:
+            parts.append(f"text={_clip_detail(text, 200)}")
+            break
+    return "; ".join(parts)
+
+
 def _extract_json_object(raw: str) -> str | None:
     """Localiza el primer objeto JSON en texto con ruido alrededor."""
     start = raw.find("{")
@@ -231,7 +287,7 @@ async def _raw_call_deepseek(
     max_tokens: int,
     temperature: float,
     response_format: dict | None,
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, str | None, str | None]:
     payload = {
         "model": model,
         "messages": messages,
@@ -251,18 +307,31 @@ async def _raw_call_deepseek(
                 if resp.status != 200:
                     body = await resp.text()
                     log.error(f"{_provider_label()} HTTP {resp.status}: {body[:200]}")
-                    return None, FAIL_HTTP
+                    return None, FAIL_HTTP, _clip_detail(body, 200)
                 data = await resp.json()
-                content = data["choices"][0]["message"]["content"]
-                if not content or not content.strip():
-                    return None, FAIL_EMPTY_API
-                return content.strip(), None
+                choices = data.get("choices") or []
+                if not choices:
+                    detail = _format_deepseek_empty_detail(data, model=model)
+                    log.warning(f"{_provider_label()} respuesta sin choices: {detail}")
+                    return None, FAIL_EMPTY_API, detail
+                message = choices[0].get("message") or {}
+                content, source = _extract_deepseek_message_text(message)
+                if content:
+                    if source == "reasoning_content":
+                        log.info(
+                            f"{_provider_label()} content vacío — "
+                            "recuperado desde reasoning_content"
+                        )
+                    return content, None, None
+                detail = _format_deepseek_empty_detail(data, model=model)
+                log.warning(f"{_provider_label()} respuesta vacía: {detail}")
+                return None, FAIL_EMPTY_API, detail
     except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError) as e:
         log.error(f"{_provider_label()} red/timeout: {type(e).__name__}: {e}")
-        return None, FAIL_NETWORK
+        return None, FAIL_NETWORK, f"{type(e).__name__}: {e}"
     except Exception as e:
         log.error(f"{_provider_label()} error inesperado: {type(e).__name__}: {e}")
-        return None, FAIL_NETWORK
+        return None, FAIL_NETWORK, f"{type(e).__name__}: {e}"
 
 
 async def _raw_call_anthropic(
@@ -272,10 +341,10 @@ async def _raw_call_anthropic(
     max_tokens: int,
     temperature: float,
     response_format: dict | None,
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, str | None, str | None]:
     system, convo = _split_messages_for_anthropic(messages)
     if not convo:
-        return None, FAIL_EMPTY_API
+        return None, FAIL_EMPTY_API, "sin mensajes de conversación"
 
     payload: dict = {
         "model": model,
@@ -304,7 +373,7 @@ async def _raw_call_anthropic(
                 if resp.status != 200:
                     body = await resp.text()
                     log.error(f"{_provider_label()} HTTP {resp.status}: {body[:200]}")
-                    return None, FAIL_HTTP
+                    return None, FAIL_HTTP, _clip_detail(body, 200)
                 data = await resp.json()
                 text_parts = [
                     block["text"]
@@ -313,20 +382,22 @@ async def _raw_call_anthropic(
                 ]
                 content = "".join(text_parts).strip()
                 if not content:
-                    return None, FAIL_EMPTY_API
-                return content, None
+                    detail = _format_anthropic_empty_detail(data, model=model)
+                    log.warning(f"{_provider_label()} respuesta vacía: {detail}")
+                    return None, FAIL_EMPTY_API, detail
+                return content, None, None
     except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError) as e:
         log.error(f"{_provider_label()} red/timeout: {type(e).__name__}: {e}")
-        return None, FAIL_NETWORK
+        return None, FAIL_NETWORK, f"{type(e).__name__}: {e}"
     except Exception as e:
         log.error(f"{_provider_label()} error inesperado: {type(e).__name__}: {e}")
-        return None, FAIL_NETWORK
+        return None, FAIL_NETWORK, f"{type(e).__name__}: {e}"
 
 
 async def raw_call(
     messages: list[dict], max_tokens: int = 200, temperature: float = 0.3, response_format: dict | None = None
-) -> tuple[str | None, str | None]:
-    """HTTP al proveedor LLM activo. Devuelve (contenido, código_fallo). código_fallo es None si OK."""
+) -> tuple[str | None, str | None, str | None]:
+    """HTTP al proveedor LLM activo. Devuelve (contenido, código_fallo, detalle). detalle solo en fallo."""
     provider, model = llm_settings.get_active_config()
     if provider == "anthropic":
         return await _raw_call_anthropic(
@@ -482,7 +553,7 @@ REGLAS CRÍTICAS DE ESTILO (prioridad máxima):
                 })
             return None, 0, topic_guess, LLMFailure(FAIL_ABORTED, attempt, "nuevo mensaje del usuario")
 
-        raw, api_fail = await raw_call(
+        raw, api_fail, api_detail = await raw_call(
             messages=messages,
             max_tokens=512,
             temperature=0.85,
@@ -490,11 +561,11 @@ REGLAS CRÍTICAS DE ESTILO (prioridad máxima):
         )
         if not raw:
             last_reason = api_fail or FAIL_EMPTY_API
-            last_detail = failure_label(last_reason)
+            last_detail = api_detail or failure_label(last_reason)
             if attempt < attempts:
                 log.warning(
                     f"LLM fallo {chat_id} intento {attempt}/{attempts}: "
-                    f"{failure_label(last_reason)} — reintentando..."
+                    f"{failure_label(last_reason)} — {last_detail} — reintentando..."
                 )
                 await asyncio.sleep(delay)
             continue

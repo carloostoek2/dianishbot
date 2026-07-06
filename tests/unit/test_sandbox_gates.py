@@ -91,7 +91,7 @@ async def test_auto_reply_sandbox_skips_save_example(in_memory_training_db):
 
     with (
         patch("asyncio.sleep", new_callable=AsyncMock),
-        patch("services.llm.raw_call", new_callable=AsyncMock, return_value=(llm_json, None)),
+        patch("services.llm.raw_call", new_callable=AsyncMock, return_value=(llm_json, None, None)),
         patch("handlers.timer.notify_diana_approval", new_callable=AsyncMock) as mock_notify,
         patch("handlers.timer.save_example") as mock_save,
     ):
@@ -114,7 +114,7 @@ async def test_auto_reply_sandbox_skips_save_llm_failure(in_memory_training_db):
 
     with (
         patch("asyncio.sleep", new_callable=AsyncMock),
-        patch("services.llm.raw_call", new_callable=AsyncMock, return_value=(None, "error_http_api")),
+        patch("services.llm.raw_call", new_callable=AsyncMock, return_value=(None, "error_http_api", "HTTP 503")),
         patch("handlers.timer.save_llm_failure") as mock_save_fail,
         patch("handlers.timer.notify_diana_llm_failure", new_callable=AsyncMock) as mock_notify,
     ):
@@ -135,7 +135,7 @@ async def test_auto_reply_sandbox_still_notifies_approval(in_memory_training_db)
 
     with (
         patch("asyncio.sleep", new_callable=AsyncMock),
-        patch("services.llm.raw_call", new_callable=AsyncMock, return_value=(llm_json, None)),
+        patch("services.llm.raw_call", new_callable=AsyncMock, return_value=(llm_json, None, None)),
         patch("handlers.timer.notify_diana_approval", new_callable=AsyncMock) as mock_notify,
     ):
         await timer_mod.auto_reply(AsyncMock(), chat_id, "vip", "bc_test", gen)

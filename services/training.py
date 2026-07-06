@@ -162,7 +162,7 @@ def format_llm_failure_report(days: int = 7) -> str:
                 f"{failure_label(reason)} | {attempts} intentos"
             )
             if detail:
-                lines.append(f"    {detail[:80]}")
+                lines.append(f"    {detail[:120]}")
 
     return "\n".join(lines)
 

@@ -1,7 +1,9 @@
-"""Unit tests for /nota, /notas, /borrar_notas admin commands."""
+"""Unit tests for /nota, /notas, /borrar_notas admin commands and VIP forward."""
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from telegram import MessageOrigin
 
 from services.memory import MemoryService
 
@@ -293,3 +295,85 @@ async def test_nota_persist_error(make_mock_update, make_context, admin_user):
 
     assert result is True
     assert "Error" in update.message.reply_text.await_args[0][0]
+
+
+def _forward_update(make_mock_update, admin_user, *, user_id, username, first_name):
+    update = make_mock_update(text=None, user=admin_user)
+    origin = MagicMock()
+    origin.type = MessageOrigin.USER
+    origin.sender_user = MagicMock(id=user_id, username=username, first_name=first_name)
+    update.message.forward_origin = origin
+    return update
+
+
+@pytest.mark.asyncio
+async def test_forward_registered_user_shows_profile(
+    make_mock_update, make_context, admin_user,
+):
+    auth_users.add_user(VIP_ID, "vip_user", "VIP Name")
+    update = _forward_update(
+        make_mock_update, admin_user,
+        user_id=VIP_ID, username="vip_user", first_name="VIP Name",
+    )
+    ctx = make_context()
+
+    result = await auth_users.handle_admin_message(update, ctx)
+
+    assert result is True
+    update.message.reply_text.assert_not_awaited()
+    ctx.bot.send_message.assert_awaited_once()
+    text = ctx.bot.send_message.await_args[1]["text"]
+    assert "👤 Perfil" in text
+    assert f"ID: {VIP_ID}" in text
+    assert "Modo respuesta:" in text
+    assert ctx.bot.send_message.await_args[1]["reply_markup"] is not None
+
+
+@pytest.mark.asyncio
+async def test_forward_new_user_registers(
+    make_mock_update, make_context, admin_user,
+):
+    new_id = 777001
+    update = _forward_update(
+        make_mock_update, admin_user,
+        user_id=new_id, username="new_vip", first_name="New VIP",
+    )
+
+    result = await auth_users.handle_admin_message(update, make_context())
+
+    assert result is True
+    assert auth_users.get_user_entry(new_id) is not None
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args[0][0]
+    assert "Agregado:" in text
+    assert str(new_id) in text
+
+
+@pytest.mark.asyncio
+async def test_forward_hidden_user_error(make_mock_update, make_context, admin_user):
+    update = make_mock_update(text=None, user=admin_user)
+    origin = MagicMock()
+    origin.type = MessageOrigin.HIDDEN_USER
+    update.message.forward_origin = origin
+
+    result = await auth_users.handle_admin_message(update, make_context())
+
+    assert result is True
+    update.message.reply_text.assert_awaited_once()
+    assert "privacidad" in update.message.reply_text.await_args[0][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_forward_unidentified_origin_error(
+    make_mock_update, make_context, admin_user,
+):
+    update = make_mock_update(text=None, user=admin_user)
+    origin = MagicMock()
+    origin.type = MessageOrigin.CHANNEL
+    update.message.forward_origin = origin
+
+    result = await auth_users.handle_admin_message(update, make_context())
+
+    assert result is True
+    update.message.reply_text.assert_awaited_once()
+    assert "identificar" in update.message.reply_text.await_args[0][0].lower()

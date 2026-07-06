@@ -366,18 +366,30 @@ async def send_estado(bot, chat_id: int) -> None:
     )
 
 
-async def send_user_detail(
-    bot,
-    chat_id: int,
+_PROFILE_FACT_LABELS = {
+    "name": "Se llama",
+    "occupation": "Trabaja/estudia en",
+    "location": "Es de",
+    "interests": "Le interesa",
+    "relationship": "Estado sentimental",
+    "personality": "Su estilo",
+    "last_topic": "Ultimo tema",
+    "notable": "Dato importante",
+}
+
+
+def _build_user_profile_lines(
     user_id: int,
     *,
     context: ContextTypes.DEFAULT_TYPE | None = None,
-) -> None:
-    """Envia la vista detalle de un usuario VIP."""
+    include_footer: bool = False,
+) -> list[str] | None:
+    """Texto del perfil VIP. None si el usuario no existe."""
     entry = auth_service.get_user_entry(user_id)
     if not entry:
-        await bot.send_message(chat_id=chat_id, text="Usuario no encontrado.")
-        return
+        return None
+
+    from services.memory import extract_note_display_date, extract_note_display_text
 
     svc = _memory_service(context)
     facts: dict[str, str] = {}
@@ -387,53 +399,41 @@ async def send_user_detail(
         facts = {k: v for k, v in raw_facts.items() if k != "notes"}
         notes = svc.get_notes(user_id)
 
-    username = entry.get("username")
-    first_name = entry.get("first_name")
     added = entry.get("added_at", "?")[:10]
-
+    auto_send = auth_service.is_auto_send_enabled(user_id)
     lines = [f"👤 Perfil de {_display_name(entry)}", ""]
     lines.append(f"ID: {user_id}")
-    if first_name and username:
-        lines.append(f"Nombre: {first_name}")
+    if entry.get("first_name") and entry.get("username"):
+        lines.append(f"Nombre: {entry['first_name']}")
     lines.append(f"Agregado: {added}")
+    lines.append(
+        f"Modo respuesta: {'🤖 Automático' if auto_send else '👁 Supervisado'}"
+    )
 
     if facts:
         lines.append("")
         lines.append("📊 Datos extraidos:")
-        labels = {
-            "name": "Se llama",
-            "occupation": "Trabaja/estudia en",
-            "location": "Es de",
-            "interests": "Le interesa",
-            "relationship": "Estado sentimental",
-            "personality": "Su estilo",
-            "last_topic": "Ultimo tema",
-            "notable": "Dato importante",
-        }
         for key, value in facts.items():
-            label = labels.get(key, key)
+            label = _PROFILE_FACT_LABELS.get(key, key)
             lines.append(f"  • {label}: {value}")
 
-    if notes:
-        from services.memory import extract_note_display_date, extract_note_display_text
+    display_notes = []
+    for n in notes:
+        text = extract_note_display_text(n, user_id)
+        if text:
+            date = extract_note_display_date(n, user_id)
+            display_notes.append((date, text))
 
-        display_notes = []
-        for n in notes:
-            text = extract_note_display_text(n, user_id)
-            if text:
-                date = extract_note_display_date(n, user_id)
-                display_notes.append((date, text))
+    if display_notes:
+        lines.append("")
+        lines.append(f"📝 Notas de Diana ({len(display_notes)}):")
+        for date_str, text in display_notes[-5:]:
+            preview = text[:100] + ("..." if len(text) > 100 else "")
+            lines.append(f"  [{date_str}] {preview}")
+        if len(display_notes) > 5:
+            lines.append(f"  ... y {len(display_notes) - 5} mas")
 
-        if display_notes:
-            lines.append("")
-            lines.append(f"📝 Notas de Diana ({len(display_notes)}):")
-            for date_str, text in display_notes[-5:]:
-                preview = text[:100] + ("..." if len(text) > 100 else "")
-                lines.append(f"  [{date_str}] {preview}")
-            if len(display_notes) > 5:
-                lines.append(f"  ... y {len(display_notes) - 5} mas")
-
-    if not facts and not notes:
+    if not facts and not display_notes:
         lines.append("")
         lines.append("Sin datos extraidos ni notas todavia.")
 
@@ -441,6 +441,26 @@ async def send_user_detail(
     if sandbox.is_active(user_id):
         lines.append("")
         lines.append("🧪 Sandbox activo — notas deshabilitadas.")
+
+    if include_footer:
+        lines.append("")
+        lines.append("Usa los botones para gestionar este perfil.")
+
+    return lines
+
+
+async def send_user_detail(
+    bot,
+    chat_id: int,
+    user_id: int,
+    *,
+    context: ContextTypes.DEFAULT_TYPE | None = None,
+) -> None:
+    """Envia la vista detalle de un usuario VIP."""
+    lines = _build_user_profile_lines(user_id, context=context)
+    if not lines:
+        await bot.send_message(chat_id=chat_id, text="Usuario no encontrado.")
+        return
 
     await bot.send_message(
         chat_id=chat_id,
@@ -796,72 +816,12 @@ async def _replace_with_detail(
     *,
     context: ContextTypes.DEFAULT_TYPE | None = None,
 ) -> None:
-    entry = auth_service.get_user_entry(user_id)
-    if not entry:
+    lines = _build_user_profile_lines(
+        user_id, context=context, include_footer=True,
+    )
+    if not lines:
         await query.answer("Usuario no encontrado", show_alert=True)
         return
-
-    from services.memory import extract_note_display_date, extract_note_display_text
-
-    svc = _memory_service(context)
-    facts: dict[str, str] = {}
-    notes: list[dict] = []
-    if svc:
-        raw = svc.get_facts(user_id)
-        facts = {k: v for k, v in raw.items() if k != "notes"}
-        notes = svc.get_notes(user_id)
-
-    added = entry.get("added_at", "?")[:10]
-    auto_send = auth_service.is_auto_send_enabled(user_id)
-    lines = [f"👤 Perfil de {_display_name(entry)}", ""]
-    lines.append(f"ID: {user_id}")
-    if entry.get("first_name") and entry.get("username"):
-        lines.append(f"Nombre: {entry['first_name']}")
-    lines.append(f"Agregado: {added}")
-    lines.append(
-        f"Modo respuesta: {'🤖 Automático' if auto_send else '👁 Supervisado'}"
-    )
-
-    if facts:
-        lines.append("")
-        lines.append("📊 Datos extraidos:")
-        labels = {
-            "name": "Se llama", "occupation": "Trabaja/estudia en",
-            "location": "Es de", "interests": "Le interesa",
-            "relationship": "Estado sentimental", "personality": "Su estilo",
-            "last_topic": "Ultimo tema", "notable": "Dato importante",
-        }
-        for key, value in facts.items():
-            label = labels.get(key, key)
-            lines.append(f"  • {label}: {value}")
-
-    if notes:
-        display_notes = []
-        for n in notes:
-            text = extract_note_display_text(n, user_id)
-            if text:
-                date = extract_note_display_date(n, user_id)
-                display_notes.append((date, text))
-        if display_notes:
-            lines.append("")
-            lines.append(f"📝 Notas ({len(display_notes)}):")
-            for date_str, text in display_notes[-5:]:
-                preview = text[:100] + ("..." if len(text) > 100 else "")
-                lines.append(f"  [{date_str}] {preview}")
-            if len(display_notes) > 5:
-                lines.append(f"  ... y {len(display_notes) - 5} mas")
-
-    if not facts and not notes:
-        lines.append("")
-        lines.append("Sin datos extraidos ni notas todavia.")
-
-    from services import sandbox
-    if sandbox.is_active(user_id):
-        lines.append("")
-        lines.append("🧪 Sandbox activo — notas deshabilitadas.")
-
-    lines.append("")
-    lines.append("Usa los botones para gestionar este perfil.")
 
     await _edit_or_send(query, "\n".join(lines),
                         _build_user_detail_keyboard(user_id))
@@ -1470,9 +1430,8 @@ async def handle_admin_message(
         user_id, username, first_name = extracted
         result = auth_service.add_user(user_id, username, first_name)
         if result == "already":
-            entry = auth_service.get_user_entry(user_id)
-            await msg.reply_text(
-                f"{_display_name(entry)} ya está en la lista."
+            await send_user_detail(
+                context.bot, msg.chat_id, user_id, context=context,
             )
         elif result == "full":
             await msg.reply_text(

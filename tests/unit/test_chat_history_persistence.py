@@ -280,7 +280,7 @@ async def test_get_diana_response_lazy_loads_when_ram_empty(chat_history_db, in_
     llm_json = '{"response": "hey", "confidence": 85, "topic": "saludo"}'
 
     with (
-        patch("services.llm.raw_call", new_callable=AsyncMock, return_value=(llm_json, None)),
+        patch("services.llm.raw_call", new_callable=AsyncMock, return_value=(llm_json, None, None)),
         patch("services.llm.asyncio.sleep", new_callable=AsyncMock),
     ):
         response, confidence, topic, failure = await get_diana_response(VIP_CHAT_ID)

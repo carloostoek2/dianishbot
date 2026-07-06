@@ -44,7 +44,7 @@ async def test_get_diana_response_uses_sandbox_profile(in_memory_training_db):
 
     async def capture_raw(messages, **kwargs):
         captured["messages"] = messages
-        return llm_json, None
+        return llm_json, None, None
 
     mock_memory = MagicMock()
     llm_mod.memory_service = mock_memory
@@ -66,7 +66,7 @@ async def test_get_diana_response_live_memory_when_inactive(in_memory_training_d
     mock_memory.get_context_block.return_value = "\n\n---\nSOBRE ESTE USUARIO"
     llm_mod.memory_service = mock_memory
 
-    with patch("services.llm.raw_call", new_callable=AsyncMock, return_value=(llm_json, None)):
+    with patch("services.llm.raw_call", new_callable=AsyncMock, return_value=(llm_json, None, None)):
         await llm_mod.get_diana_response(VIP_CHAT_ID)
 
     mock_memory.get_context_block.assert_called_once_with(VIP_CHAT_ID)
@@ -81,7 +81,7 @@ async def test_sandbox_empty_profile_no_memory_block(in_memory_training_db):
 
     async def capture_raw(messages, **kwargs):
         captured["messages"] = messages
-        return llm_json, None
+        return llm_json, None, None
 
     with patch("services.llm.raw_call", new_callable=AsyncMock, side_effect=capture_raw):
         await llm_mod.get_diana_response(VIP_CHAT_ID)
@@ -99,7 +99,7 @@ async def test_get_diana_response_inyeccion_previa_has_untrusted_wrapper(in_memo
 
     async def capture_raw(messages, **kwargs):
         captured["messages"] = messages
-        return llm_json, None
+        return llm_json, None, None
 
     with patch("services.llm.raw_call", new_callable=AsyncMock, side_effect=capture_raw):
         await llm_mod.get_diana_response(VIP_CHAT_ID)

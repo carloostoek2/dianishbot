@@ -32,7 +32,7 @@ async def notify_diana_llm_failure(
         f"Intentos: {failure.attempts}\n"
     )
     if failure.detail:
-        texto += f"Detalle: {failure.detail[:200]}\n"
+        texto += f"Detalle: {failure.detail[:400]}\n"
     texto += f"\nContexto:\n{preview}\n\n"
     texto += "Puedes responder manualmente en el chat del usuario."
     try:

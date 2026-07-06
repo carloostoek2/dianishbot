@@ -42,7 +42,7 @@ async def test_auto_reply_aborts_llm_retry_when_new_message_arrives(in_memory_tr
         patch("asyncio.sleep", new_callable=AsyncMock, side_effect=sleep_side_effect),
         patch(
             "services.llm.raw_call", new_callable=AsyncMock,
-            return_value=(None, "error_http_api"),
+            return_value=(None, "error_http_api", "HTTP 503"),
         ) as mock_raw,
         patch("handlers.timer.notify_diana_approval", new_callable=AsyncMock) as mock_notify,
         patch("handlers.timer.notify_diana_llm_failure", new_callable=AsyncMock) as mock_fail_notify,
@@ -69,8 +69,8 @@ async def test_auto_reply_delivers_after_llm_retry_succeeds(in_memory_training_d
     history[chat_id] = [{"role": "user", "content": "hola"}]
 
     payloads = [
-        (None, "error_http_api"),
-        ('{"response": "hey", "confidence": 85, "topic": "saludo"}', None),
+        (None, "error_http_api", "HTTP 503"),
+        ('{"response": "hey", "confidence": 85, "topic": "saludo"}', None, None),
     ]
 
     with (
@@ -113,7 +113,7 @@ async def test_auto_reply_llm_escalation_topic_notifies_diana_not_draft(in_memor
 
     with (
         patch("asyncio.sleep", new_callable=AsyncMock),
-        patch("services.llm.raw_call", new_callable=AsyncMock, return_value=(llm_json, None)),
+        patch("services.llm.raw_call", new_callable=AsyncMock, return_value=(llm_json, None, None)),
         patch("handlers.timer.notify_diana_approval", new_callable=AsyncMock) as mock_approval,
         patch("handlers.business.escalate_to_diana", new_callable=AsyncMock) as mock_escalate,
         patch("handlers.timer.save_example") as mock_save,

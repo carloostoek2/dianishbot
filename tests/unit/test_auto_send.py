@@ -64,12 +64,12 @@ def test_set_auto_send_unknown_user():
 def test_compute_reply_delay_auto_send_user(monkeypatch):
     monkeypatch.setattr(timer_mod, "APPROVAL_MODE", True)
     monkeypatch.setattr(timer_mod, "SILENCE_MINUTES", 2)
-    monkeypatch.setattr(timer_mod, "RESPONSE_DELAY_MIN", 1)
-    monkeypatch.setattr(timer_mod, "RESPONSE_DELAY_MAX", 3)
+    monkeypatch.setattr(timer_mod, "RESPONSE_DELAY_MIN", 3)
+    monkeypatch.setattr(timer_mod, "RESPONSE_DELAY_MAX", 10)
 
     auth_users.set_auto_send(VIP_ID, True)
     delay = timer_mod.compute_reply_delay(VIP_ID)
-    assert 60 <= delay <= 180
+    assert 180 <= delay <= 600
 
     auth_users.set_auto_send(VIP_ID, False)
     assert timer_mod.compute_reply_delay(VIP_ID) == 120.0
@@ -91,7 +91,7 @@ async def test_auto_reply_delivers_when_auto_send_enabled(
         patch("asyncio.sleep", new_callable=AsyncMock),
         patch(
             "services.llm.raw_call", new_callable=AsyncMock,
-            return_value=('{"response": "hey", "confidence": 85, "topic": "saludo"}', None),
+            return_value=('{"response": "hey", "confidence": 85, "topic": "saludo"}', None, None),
         ),
         patch("handlers.timer.notify_diana_approval", new_callable=AsyncMock) as mock_approval,
         patch("handlers.timer.deliver_vip_response", new_callable=AsyncMock, return_value=True) as mock_deliver,
@@ -124,7 +124,7 @@ async def test_auto_reply_approval_when_auto_send_disabled(
         patch("asyncio.sleep", new_callable=AsyncMock),
         patch(
             "services.llm.raw_call", new_callable=AsyncMock,
-            return_value=('{"response": "hey", "confidence": 85, "topic": "saludo"}', None),
+            return_value=('{"response": "hey", "confidence": 85, "topic": "saludo"}', None, None),
         ),
         patch("handlers.timer.notify_diana_approval", new_callable=AsyncMock) as mock_approval,
         patch("handlers.timer.deliver_vip_response", new_callable=AsyncMock) as mock_deliver,

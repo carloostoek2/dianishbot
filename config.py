@@ -35,8 +35,8 @@ AUTH_USERS_MAX  = 10
 STATE_FILE         = "diana_state.json"
 RUNTIME_STATE_FILE = "diana_runtime.json"
 
-RESPONSE_DELAY_MIN = 1   # minutos — inicio del rango de espera antes del flujo
-RESPONSE_DELAY_MAX = 8   # minutos — fin del rango (aleatorio entre min y max)
+RESPONSE_DELAY_MIN = 3   # minutos — inicio del rango de espera antes del flujo
+RESPONSE_DELAY_MAX = 10  # minutos — fin del rango (aleatorio entre min y max)
 MAX_HISTORY     = 50    # mensajes de contexto que se envían al LLM
 MAX_STORED_HISTORY = 50   # mensajes persistidos en SQLite por chat (recorte en append)
 BACKFILL_INTERVAL_SEC = 3600
