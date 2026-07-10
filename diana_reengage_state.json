@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "last_scan_at": null,
+  "users": {
+    "777001": {
+      "last_vip_inbound_at": "2026-07-10T07:55:25.497155+00:00",
+      "last_reengage_at": null,
+      "reengage_sent_for_inbound_at": null,
+      "bc_id": "bc_test",
+      "username": "testvip"
+    }
+  }
+}
