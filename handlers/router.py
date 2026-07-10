@@ -108,5 +108,6 @@ async def process_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _post_init(app: Application) -> None:
     _load_connections_state()
     await recover_runtime_on_startup(app.bot)
-    from services import history_backfill
+    from services import history_backfill, reengagement
     history_backfill.start_scheduler(app)
+    reengagement.start_scheduler(app)

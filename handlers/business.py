@@ -242,6 +242,12 @@ async def _handle_business_message(
         append_message(chat_id, "user", text)
     chat_bc[chat_id] = bc_id
     pending_msg[chat_id] = msg.message_id
+
+    # Silence-cycle clock: only authorized VIP inbound (not edit/owner/observe/sandbox)
+    from services import reengagement, sandbox
+    if not sandbox.is_active(chat_id):
+        reengagement.touch_inbound(chat_id, bc_id or "", username)
+
     reason = needs_escalation(text)
     if reason:
         if chat_id in timers:

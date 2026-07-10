@@ -786,3 +786,249 @@ def test_start_scheduler_skips_when_disabled(monkeypatch):
     app = MagicMock()
     reengagement.start_scheduler(app)
     assert created == []
+
+
+# ── WU3 wiring hooks (business touch + router scheduler) ─────────────
+
+
+def _make_business_msg(
+    *,
+    chat_id: int = 9001,
+    sender_id: int = 9001,
+    bc_id: str = "bc-wire",
+    text: str = "hola diana",
+    username: str = "vip_wire",
+    message_id: int = 42,
+):
+    msg = MagicMock()
+    msg.business_connection_id = bc_id
+    msg.chat.id = chat_id
+    msg.chat.type = "private"
+    msg.text = text
+    msg.caption = None
+    msg.photo = None
+    msg.video = None
+    msg.voice = None
+    msg.audio = None
+    msg.document = None
+    msg.sticker = None
+    msg.animation = None
+    msg.video_note = None
+    msg.from_user = MagicMock()
+    msg.from_user.id = sender_id
+    msg.from_user.username = username
+    msg.from_user.first_name = username
+    msg.message_id = message_id
+    return msg
+
+
+@pytest.mark.asyncio
+async def test_business_authorized_vip_inbound_calls_touch_inbound(monkeypatch):
+    """Authorized VIP inbound (not edit/owner/observe-only) must touch reengagement clock."""
+    import auth_users
+    import state as state_mod
+    from handlers import business
+
+    users_file = Path(reengagement.REENGAGE_STATE_FILE).parent / "auth_wire.json"
+    auth_users.configure(
+        users_file=str(users_file), max_users=10, seed_user_ids=[9001], admin_id=1,
+    )
+    state_mod.connections["bc-wire"] = 1  # owner is Diana admin, not VIP
+    state_mod.history.clear()
+    state_mod.timers.clear()
+    state_mod.timer_schedule.clear()
+    state_mod.reply_gen.clear()
+    state_mod.chat_bc.clear()
+    state_mod.pending_msg.clear()
+
+    msg = _make_business_msg()
+    context = MagicMock()
+    context.bot = AsyncMock()
+
+    with (
+        patch("services.reengagement.touch_inbound") as mock_touch,
+        patch("handlers.business.auto_reply", new_callable=AsyncMock),
+        patch("handlers.business.needs_escalation", return_value=None),
+        patch("handlers.business.append_message"),
+        patch("handlers.business.ensure_loaded"),
+        patch("handlers.business._save_runtime_state"),
+    ):
+        await business._handle_business_message(msg, context, edited=False)
+
+    mock_touch.assert_called_once_with(9001, "bc-wire", "vip_wire")
+
+
+@pytest.mark.asyncio
+async def test_business_unauthorized_does_not_touch_inbound(monkeypatch):
+    import auth_users
+    import state as state_mod
+    from handlers import business
+
+    users_file = Path(reengagement.REENGAGE_STATE_FILE).parent / "auth_unauth.json"
+    auth_users.configure(
+        users_file=str(users_file), max_users=10, seed_user_ids=[], admin_id=1,
+    )
+    state_mod.connections["bc-wire"] = 1
+
+    msg = _make_business_msg(chat_id=9002, sender_id=9002, username="stranger")
+    context = MagicMock()
+    context.bot = AsyncMock()
+
+    with (
+        patch("services.reengagement.touch_inbound") as mock_touch,
+        patch("handlers.business.OBSERVE_UNAUTHORIZED", False),
+    ):
+        await business._handle_business_message(msg, context, edited=False)
+
+    mock_touch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_business_edit_does_not_touch_inbound(monkeypatch):
+    import auth_users
+    import state as state_mod
+    from handlers import business
+
+    users_file = Path(reengagement.REENGAGE_STATE_FILE).parent / "auth_edit.json"
+    auth_users.configure(
+        users_file=str(users_file), max_users=10, seed_user_ids=[9003], admin_id=1,
+    )
+    state_mod.connections["bc-wire"] = 1
+
+    msg = _make_business_msg(chat_id=9003, sender_id=9003, username="vip_edit")
+    context = MagicMock()
+    context.bot = AsyncMock()
+
+    with patch("services.reengagement.touch_inbound") as mock_touch:
+        await business._handle_business_message(msg, context, edited=True)
+
+    mock_touch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_business_owner_inbound_does_not_touch_inbound(monkeypatch):
+    """Diana (business owner) messages must not advance VIP silence clock."""
+    import auth_users
+    import state as state_mod
+    from handlers import business
+
+    owner_id = 555
+    users_file = Path(reengagement.REENGAGE_STATE_FILE).parent / "auth_owner.json"
+    auth_users.configure(
+        users_file=str(users_file), max_users=10, seed_user_ids=[9004], admin_id=owner_id,
+    )
+    state_mod.connections["bc-wire"] = owner_id
+    state_mod.history.clear()
+
+    msg = _make_business_msg(
+        chat_id=9004, sender_id=owner_id, username="diana_owner",
+    )
+    context = MagicMock()
+    context.bot = AsyncMock()
+
+    with (
+        patch("services.reengagement.touch_inbound") as mock_touch,
+        patch("handlers.business.append_message"),
+        patch("handlers.business.ensure_loaded"),
+    ):
+        await business._handle_business_message(msg, context, edited=False)
+
+    mock_touch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_business_observe_only_does_not_touch_inbound(monkeypatch):
+    """Unauthorized observe-only path must not call touch_inbound."""
+    import auth_users
+    import state as state_mod
+    from handlers import business
+
+    users_file = Path(reengagement.REENGAGE_STATE_FILE).parent / "auth_obs.json"
+    auth_users.configure(
+        users_file=str(users_file), max_users=10, seed_user_ids=[], admin_id=1,
+    )
+    state_mod.connections["bc-wire"] = 1
+    state_mod.history.clear()
+
+    msg = _make_business_msg(chat_id=9005, sender_id=9005, username="observed")
+    context = MagicMock()
+    context.bot = AsyncMock()
+
+    with (
+        patch("services.reengagement.touch_inbound") as mock_touch,
+        patch("handlers.business.OBSERVE_UNAUTHORIZED", True),
+        patch("handlers.business.append_message"),
+        patch("handlers.business.ensure_loaded"),
+    ):
+        await business._handle_business_message(msg, context, edited=False)
+
+    mock_touch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_business_sandbox_active_does_not_touch_inbound(monkeypatch):
+    """Sandbox chats must not pollute durable reengagement state via touch."""
+    import auth_users
+    import state as state_mod
+    from handlers import business
+    from services import sandbox
+
+    users_file = Path(reengagement.REENGAGE_STATE_FILE).parent / "auth_sbx.json"
+    auth_users.configure(
+        users_file=str(users_file), max_users=10, seed_user_ids=[9006], admin_id=1,
+    )
+    state_mod.connections["bc-wire"] = 1
+    state_mod.history.clear()
+    state_mod.timers.clear()
+    state_mod.timer_schedule.clear()
+    state_mod.reply_gen.clear()
+
+    # Force sandbox active without needing profiles file
+    sandbox._active[9006] = "nuevo"
+
+    msg = _make_business_msg(chat_id=9006, sender_id=9006, username="sbx_vip")
+    context = MagicMock()
+    context.bot = AsyncMock()
+
+    try:
+        with (
+            patch("services.reengagement.touch_inbound") as mock_touch,
+            patch("handlers.business.auto_reply", new_callable=AsyncMock),
+            patch("handlers.business.needs_escalation", return_value=None),
+            patch("handlers.business.append_message"),
+            patch("handlers.business.ensure_loaded"),
+            patch("handlers.business._save_runtime_state"),
+        ):
+            await business._handle_business_message(msg, context, edited=False)
+
+        mock_touch.assert_not_called()
+    finally:
+        sandbox._active.pop(9006, None)
+
+
+@pytest.mark.asyncio
+async def test_post_init_starts_reengagement_scheduler(monkeypatch):
+    """_post_init must start reengagement scheduler alongside backfill."""
+    from handlers import router
+
+    app = MagicMock()
+    backfill_calls = []
+    reengage_calls = []
+
+    async def fake_recover(bot):
+        return None
+
+    monkeypatch.setattr(router, "recover_runtime_on_startup", fake_recover)
+    monkeypatch.setattr(router, "_load_connections_state", lambda: None)
+
+    import services.history_backfill as hb
+    import services.reengagement as re
+
+    monkeypatch.setattr(hb, "start_scheduler", lambda a: backfill_calls.append(a))
+    monkeypatch.setattr(re, "start_scheduler", lambda a: reengage_calls.append(a))
+
+    await router._post_init(app)
+
+    assert backfill_calls == [app]
+    assert reengage_calls == [app]
+

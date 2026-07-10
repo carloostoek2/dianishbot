@@ -41,7 +41,7 @@ The bot uses Telegram **Business Connections** (Chat Automation API).
 | **State**      | Runtime in-memory state                 | `state.py`                       | Shared dicts (history, timers, pending approvals) |
 | **Auth**       | VIP allowlist + admin commands          | `auth_users.py`                  | Only VIP management and `/usuarios`, `/nota`, etc. |
 | **Handlers**   | Telegram I/O only                       | `handlers/`                      | Routing, business messages, timers, callbacks. **No business logic** |
-| **Services**   | Core business logic                     | `services/`                      | LLM calls, delivery, training, memory |
+| **Services**   | Core business logic                     | `services/`                      | LLM calls, delivery, training, memory, reengagement |
 | **Tools**      | Standalone utilities                    | `extractor.py`                   | Telethon-based chat export |
 
 **Data flow for a VIP message** (memorize this):
@@ -53,6 +53,11 @@ The bot uses Telegram **Business Connections** (Chat Automation API).
 6. Approval gate (if `APPROVAL_MODE=True`) or direct delivery
 7. `deliver_vip_response()` (human-like behavior)
 8. Save example + background memory extraction
+
+**Idle re-engagement** (independent of the VIP reply flow above):
+- On authorized VIP inbound (not edit / owner / observe-only / sandbox), `business.py` calls `reengagement.touch_inbound` to advance the silence-cycle clock.
+- `router._post_init` starts `reengagement.start_scheduler` alongside history backfill.
+- The scanner in `services/reengagement.py` is **independent of `auto_reply` / LLM / approval**: fixed Spanish templates, direct send, Diana notify. See `REENGAGE_*` in `config.py`.
 
 ---
 
