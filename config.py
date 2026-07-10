@@ -50,7 +50,7 @@ REENGAGE_SCAN_INTERVAL_SEC = 3600
 REENGAGE_STATE_FILE = "diana_reengage_state.json"
 REENGAGE_TEMPLATES = [
     "Oye, ¿todo bien? Hace rato que no sé de ti 😊",
-    "Hey, ¿seguís por acá? Me acordé de vos 💭",
+    "Hey, ¿sigues por aquí? Me acordé de ti 💭",
     "¿Todo bien de tu lado? Si estás ocupado no hay problema ✨",
 ]
 LLM_MAX_RETRIES = 3     # intentos totales ante fallo de red, JSON inválido o respuesta vacía
