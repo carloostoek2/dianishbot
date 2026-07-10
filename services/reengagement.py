@@ -1,28 +1,38 @@
-"""VIP idle re-engagement: durable state, eligibility, and inbound touch.
+"""VIP idle re-engagement: durable state, eligibility, direct send, scanner.
 
-WU1: state + pure eligibility + touch/seed only. Scanner/send land in a later slice.
-No LLM, approval, or delivery coupling.
+Scanner/send path is isolated from LLM, approval gate, and the VIP delivery helper.
 """
-
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import random
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from config import REENGAGE_STATE_FILE as _DEFAULT_STATE_FILE
+from config import (
+    DIANA_ADMIN_CHAT_ID,
+    REENGAGE_ENABLED as _DEFAULT_ENABLED,
+    REENGAGE_IDLE_DAYS as _DEFAULT_IDLE_DAYS,
+    REENGAGE_SCAN_INTERVAL_SEC as _DEFAULT_SCAN_INTERVAL,
+    REENGAGE_STATE_FILE as _DEFAULT_STATE_FILE,
+    REENGAGE_TEMPLATES as _DEFAULT_TEMPLATES,
+)
 
 log = logging.getLogger("diana")
 
-# Monkeypatchable path (tests set this to a tmp file).
+# Monkeypatchable (tests set path / flags).
 REENGAGE_STATE_FILE = _DEFAULT_STATE_FILE
+REENGAGE_ENABLED = _DEFAULT_ENABLED
+REENGAGE_IDLE_DAYS = _DEFAULT_IDLE_DAYS
+REENGAGE_SCAN_INTERVAL_SEC = _DEFAULT_SCAN_INTERVAL
+REENGAGE_TEMPLATES = list(_DEFAULT_TEMPLATES)
 
 _state_lock = threading.Lock()
-
 
 def _reset_for_tests() -> None:
     """No in-memory cache today; hook kept for test fixture symmetry."""
@@ -223,3 +233,206 @@ def touch_inbound(
         entry.setdefault("last_reengage_at", None)
         entry.setdefault("reengage_sent_for_inbound_at", None)
         _save_state_unlocked(data)
+
+
+def _has_active_timer(chat_id: int) -> bool:
+    import state as state_mod
+
+    task = state_mod.timers.get(chat_id)
+    if task is None:
+        return False
+    return not task.done()
+
+
+def _has_pending_approval(chat_id: int) -> bool:
+    import state as state_mod
+
+    return any(
+        pending.get("chat_id") == chat_id
+        for pending in state_mod.pending_approval.values()
+    )
+
+
+def _pick_template() -> str:
+    templates = REENGAGE_TEMPLATES or _DEFAULT_TEMPLATES
+    if not templates:
+        return "Oye, ¿todo bien? Hace rato que no sé de ti 😊"
+    return random.choice(list(templates))
+
+
+async def _notify_diana(
+    bot,
+    *,
+    chat_id: int,
+    username: str,
+    template: str,
+    idle_days: float,
+) -> None:
+    """Info-only DM to Diana after a successful re-engagement send."""
+    if not DIANA_ADMIN_CHAT_ID:
+        return
+    who = f"@{username}" if username else str(chat_id)
+    excerpt = template if len(template) <= 80 else template[:77] + "…"
+    text = (
+        f"🔁 Re-engagement enviado a {who} (chat {chat_id})\n"
+        f"Idle ≥ {idle_days:g} día(s)\n"
+        f"Msg: {excerpt}"
+    )
+    try:
+        await bot.send_message(chat_id=DIANA_ADMIN_CHAT_ID, text=text)
+    except Exception as e:
+        log.error("Re-engagement notify Diana failed for %s: %s", chat_id, e)
+
+
+async def maybe_reengage(
+    bot,
+    chat_id: int,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Send one fixed-template re-engagement if eligible. Returns True on success.
+
+    Direct VIP send (bare bot.send_message + business_connection_id). Bypasses
+    approval and the human-like VIP delivery path. Marks cycle only when inbound
+    stamp is unchanged after send.
+    """
+    if not REENGAGE_ENABLED:
+        return False
+
+    from services.auth_service import is_authorized
+    from services import sandbox
+    from services.chat_history import append_message
+    import state as state_mod
+
+    if not is_authorized(chat_id, chat_id=chat_id):
+        return False
+    if sandbox.is_active(chat_id):
+        return False
+    if _has_active_timer(chat_id):
+        return False
+    if _has_pending_approval(chat_id):
+        return False
+
+    now_utc = _utc_now(now)
+    idle_days = float(REENGAGE_IDLE_DAYS)
+
+    # Snapshot eligibility + stamp under lock.
+    with _state_lock:
+        data = _load_state_unlocked()
+        entry = data["users"].get(_user_key(chat_id))
+        if not entry:
+            return False
+        bc_id = (entry.get("bc_id") or state_mod.chat_bc.get(chat_id) or "").strip()
+        if not bc_id:
+            log.debug("Re-engagement skip chat %s: missing bc_id", chat_id)
+            return False
+        if not is_eligible(entry, now=now_utc, idle_days=idle_days):
+            return False
+        stamp = entry.get("last_vip_inbound_at")
+        username = entry.get("username") or ""
+        template = _pick_template()
+
+    # Pre-send stamp recheck (abort send if VIP inbound advanced the cycle).
+    with _state_lock:
+        data = _load_state_unlocked()
+        entry = data["users"].get(_user_key(chat_id))
+        if not entry or entry.get("last_vip_inbound_at") != stamp:
+            log.info(
+                "Re-engagement aborted pre-send (stamp mismatch) chat %s", chat_id
+            )
+            return False
+
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=template,
+            business_connection_id=bc_id,
+        )
+    except Exception as e:
+        log.error("Re-engagement send failed chat %s: %s", chat_id, e)
+        return False
+
+    # Mark cycle only if stamp still equals the snapshot.
+    marked = False
+    with _state_lock:
+        data = _load_state_unlocked()
+        entry = data["users"].get(_user_key(chat_id))
+        if entry and entry.get("last_vip_inbound_at") == stamp:
+            entry["reengage_sent_for_inbound_at"] = stamp
+            entry["last_reengage_at"] = _iso(now_utc)
+            if bc_id and not entry.get("bc_id"):
+                entry["bc_id"] = bc_id
+            _save_state_unlocked(data)
+            marked = True
+        else:
+            log.info(
+                "Re-engagement post-send mark aborted (stamp mismatch) chat %s",
+                chat_id,
+            )
+
+    if not marked:
+        return False
+
+    from state import chat_write_lock
+
+    async with chat_write_lock(chat_id):
+        append_message(chat_id, "assistant", template)
+
+    await _notify_diana(
+        bot,
+        chat_id=chat_id,
+        username=username,
+        template=template,
+        idle_days=idle_days,
+    )
+    log.info("Re-engagement sent to chat %s (%s)", chat_id, username or "—")
+    return True
+
+
+async def _scan_once(app) -> None:
+    """Seed authorized VIPs and attempt re-engagement once per chat."""
+    if not REENGAGE_ENABLED:
+        return
+
+    from services.auth_service import get_authorized_ids
+    import state as state_mod
+
+    bot = app.bot
+    now = _utc_now()
+    for chat_id in sorted(get_authorized_ids()):
+        bc_id = state_mod.chat_bc.get(chat_id, "") or ""
+        try:
+            ensure_seeded(chat_id, bc_id=bc_id, now=now)
+            await maybe_reengage(bot, chat_id, now=now)
+        except Exception as e:
+            log.error("Re-engagement scan error chat %s: %s", chat_id, e)
+
+    with _state_lock:
+        data = _load_state_unlocked()
+        data["last_scan_at"] = _iso(now)
+        _save_state_unlocked(data)
+
+
+async def _scheduler_loop(app) -> None:
+    """Periodic scanner; interval from REENGAGE_SCAN_INTERVAL_SEC."""
+    while True:
+        try:
+            if REENGAGE_ENABLED:
+                await _scan_once(app)
+        except Exception as e:
+            log.error("Unexpected re-engagement scheduler error: %s", e)
+        await asyncio.sleep(float(REENGAGE_SCAN_INTERVAL_SEC))
+
+
+def start_scheduler(app) -> None:
+    """Start background re-engagement scanner (no-op when disabled)."""
+    if not REENGAGE_ENABLED:
+        log.info("Re-engagement scheduler disabled (REENGAGE_ENABLED=False)")
+        return
+    asyncio.create_task(_scheduler_loop(app))
+    log.info(
+        "Re-engagement scheduler started (interval=%ss, idle_days=%s, state=%s)",
+        REENGAGE_SCAN_INTERVAL_SEC,
+        REENGAGE_IDLE_DAYS,
+        REENGAGE_STATE_FILE,
+    )
