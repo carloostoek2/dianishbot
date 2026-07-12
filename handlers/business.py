@@ -3,7 +3,12 @@ import logging
 import re
 from datetime import datetime, timedelta
 from telegram.ext import ContextTypes
-from config import ESCALATE_FILE, ESCALATE_KEYWORDS, OBSERVE_UNAUTHORIZED
+from config import (
+    ESCALATE_FILE,
+    ESCALATE_KEYWORDS,
+    NON_VIP_PROMO_AUTOREPLY_ENABLED,
+    OBSERVE_UNAUTHORIZED,
+)
 import auth_users
 from state import (
     chat_write_lock,
@@ -14,6 +19,7 @@ from state import (
 from services.training import save_observed_example
 from services.chat_history import ensure_loaded, append_message
 from services.message_content import history_content_from_ptb
+from services import promo_info
 from .callbacks import notify_diana_escalation
 from .timer import auto_reply, compute_reply_delay
 log = logging.getLogger("diana")
@@ -228,6 +234,29 @@ async def _handle_business_message(
             log.info(
                 f"Mensaje ignorado — no autorizado | sender:{sender_id} "
                 f"chat:{chat_id} vip:{vip_id} edited:{edited}"
+            )
+
+        # Non-VIP promo-info autoreply (fixed templates; no LLM/approval/timer_schedule)
+        if (
+            NON_VIP_PROMO_AUTOREPLY_ENABLED
+            and not edited
+            and text.strip()
+            and promo_info.is_trigger(text)
+        ):
+            chat_bc[chat_id] = bc_id
+            pending_msg[chat_id] = msg.message_id
+            if vip_id:
+                chat_meta[chat_id] = {"vip_id": vip_id, "username": username}
+            else:
+                chat_meta.setdefault(
+                    chat_id, {"vip_id": sender_id or chat_id, "username": username}
+                )
+            await promo_info.schedule_promo_reply(
+                context.bot,
+                chat_id=chat_id,
+                username=username,
+                bc_id=bc_id,
+                vip_id=vip_id if vip_id is not None else (sender_id or chat_id),
             )
         return
 

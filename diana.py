@@ -137,6 +137,8 @@ def main():
     training_mod.db = db
     import services.chat_history as chat_history_mod
     chat_history_mod.db = db
+    import services.promo_info as promo_info_mod
+    promo_info_mod.db = db
     memory_service = MemoryService(db)
     import services.llm as llm_mod
     llm_mod.memory_service = memory_service
