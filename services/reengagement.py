@@ -253,6 +253,15 @@ def _has_pending_approval(chat_id: int) -> bool:
     )
 
 
+def _has_pending_guidance(chat_id: int) -> bool:
+    import state as state_mod
+
+    return any(
+        pending.get("chat_id") == chat_id
+        for pending in state_mod.pending_guidance.values()
+    )
+
+
 def _pick_template() -> str:
     templates = REENGAGE_TEMPLATES or _DEFAULT_TEMPLATES
     if not templates:
@@ -313,6 +322,8 @@ async def maybe_reengage(
     if _has_active_timer(chat_id):
         return False
     if _has_pending_approval(chat_id):
+        return False
+    if _has_pending_guidance(chat_id):
         return False
 
     now_utc = _utc_now(now)

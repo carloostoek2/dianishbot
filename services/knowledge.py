@@ -244,6 +244,32 @@ def get_guidance_request(guidance_id: int) -> dict | None:
     return data
 
 
+def resolve_guidance_request(
+    guidance_id: int,
+    *,
+    status: str,
+    diana_answer_raw: str | None = None,
+    policy_id: int | None = None,
+) -> bool:
+    """Mark a guidance request resolved. Returns False if id missing."""
+    conn = _require_db()
+    fields = ["status = ?", "resolved_at = ?"]
+    values: list[Any] = [status, _now()]
+    if diana_answer_raw is not None:
+        fields.append("diana_answer_raw = ?")
+        values.append(diana_answer_raw)
+    if policy_id is not None:
+        fields.append("policy_id = ?")
+        values.append(policy_id)
+    values.append(guidance_id)
+    cur = conn.execute(
+        f"UPDATE guidance_requests SET {', '.join(fields)} WHERE id = ?",
+        values,
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def match_policies(topic: str, *texts: str) -> list[dict]:
     """Score active policies: topic exact +100, each keyword hit +10.
 

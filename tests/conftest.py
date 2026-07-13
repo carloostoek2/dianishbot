@@ -339,10 +339,14 @@ async def test_db(tmp_path):
 def in_memory_training_db(test_db):
     """Provide the module-level db monkey-patch pattern used by services."""
     import services.training as training_mod
+    import services.knowledge as knowledge_mod
     old_db = training_mod.db
+    old_knowledge = knowledge_mod.db
     training_mod.db = test_db
+    knowledge_mod.db = test_db
     yield test_db
     training_mod.db = old_db
+    knowledge_mod.db = old_knowledge
 
 
 @pytest.fixture

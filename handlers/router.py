@@ -9,7 +9,12 @@ from config import DIANA_ADMIN_CHAT_ID
 from state import _load_connections_state
 from .business import _handle_business_message
 from .recovery import recover_runtime_on_startup
-from .callbacks import handle_callback, handle_diana_correction, handle_diana_note
+from .callbacks import (
+    handle_callback,
+    handle_diana_correction,
+    handle_diana_guidance_answer,
+    handle_diana_note,
+)
 from .admin_menu import handle_admin_input
 log = logging.getLogger("diana")
 
@@ -70,6 +75,8 @@ async def process_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
         and update.message.chat.id == DIANA_ADMIN_CHAT_ID
     ):
         if await auth_users.handle_admin_note(update, context):
+            return
+        if await handle_diana_guidance_answer(update, context):
             return
         if await handle_diana_note(update, context):
             return

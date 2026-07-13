@@ -11,6 +11,7 @@ from state import (
     timers,
     timer_schedule,
     pending_approval,
+    pending_guidance,
     _load_runtime_state,
     _save_runtime_state,
     _should_skip_timer_recovery,
@@ -111,17 +112,41 @@ async def recover_runtime_on_startup(bot) -> tuple[int, int]:
     if drafts_from_db:
         log.info(f"Borradores restaurados desde DB: {drafts_from_db}")
 
-    total = timers_recovered + drafts_recovered
+    # Re-notify open gray-zone guidance consults so Diana can still act
+    guidance_recovered = len(pending_guidance)
+    if guidance_recovered:
+        from .callbacks.guidance import notify_diana_guidance
+        for gid, pending in list(pending_guidance.items()):
+            try:
+                await notify_diana_guidance(
+                    bot,
+                    guidance_id=gid,
+                    pending=pending,
+                    context=history.get(pending["chat_id"], []),
+                )
+            except Exception as e:
+                log.error(f"Error re-notificando guidance #{gid}: {e}")
+        log.info(f"Guidance consults re-notificadas: {guidance_recovered}")
+
+    total = timers_recovered + drafts_recovered + guidance_recovered
     if total and DIANA_ADMIN_CHAT_ID:
         try:
+            lines = [
+                "Recuperación tras reinicio:",
+                f"• {timers_recovered} timer(s) reanudado(s)",
+                f"• {drafts_recovered} borrador(es) restaurado(s)",
+            ]
+            if guidance_recovered:
+                lines.append(
+                    f"• {guidance_recovered} consulta(s) de zona gris re-notificada(s)"
+                )
+            lines.append("")
+            lines.append(
+                "Revisa borradores/consultas anteriores si los botones no responden."
+            )
             await bot.send_message(
                 chat_id=DIANA_ADMIN_CHAT_ID,
-                text=(
-                    "Recuperación tras reinicio:\n"
-                    f"• {timers_recovered} timer(s) reanudado(s)\n"
-                    f"• {drafts_recovered} borrador(es) restaurado(s)\n\n"
-                    "Revisa borradores anteriores si los botones no responden."
-                ),
+                text="\n".join(lines),
             )
         except Exception as e:
             log.error(f"Error notificando recuperación a Diana: {e}")

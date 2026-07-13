@@ -1,4 +1,4 @@
-"""Callback handlers for approval (a:), training (t:), and escalation (e:) flows."""
+"""Callback handlers for approval (a:), training (t:), escalation (e:), guidance (g:)."""
 
 from config import DIANA_ADMIN_CHAT_ID
 import services.llm as llm_mod
@@ -52,10 +52,15 @@ from .escalation import (
     handle_escalation_action,
     notify_diana_escalation,
 )
+from .guidance import (
+    handle_diana_guidance_answer,
+    handle_guidance_action,
+    notify_diana_guidance,
+)
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Maneja callbacks de aprobación (a:), escalaciones (e:) y retroalimentación (t:)."""
+    """Maneja callbacks a:/t:/e:/g:."""
     cq = update.callback_query
     if not cq or not cq.data:
         return False
@@ -69,7 +74,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ex_id = int(parts[2])
     except ValueError:
         return False
-    if prefix not in ("a", "t", "e"):
+    if prefix not in ("a", "t", "e", "g"):
         return False
 
     admin_id = auth_users.get_admin_id()
@@ -80,6 +85,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not (
         (prefix == "a" and action in ("approve", "regen", "prev", "next", "fix", "note"))
         or (prefix == "e" and action in ("valid", "fp", "gen"))
+        or (prefix == "g" and action in ("answer", "use_draft", "skip"))
     ):
         await cq.answer()
 
@@ -87,6 +93,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await handle_approval_action(cq, context, action, ex_id)
     elif prefix == "e":
         await handle_escalation_action(cq, context, action, ex_id)
+    elif prefix == "g":
+        await handle_guidance_action(cq, context, action, ex_id)
     elif prefix == "t":
         await handle_training_action(cq, context, action, ex_id)
 
@@ -120,11 +128,14 @@ __all__ = [
     "get_diana_response",
     "handle_callback",
     "handle_diana_correction",
+    "handle_diana_guidance_answer",
     "handle_diana_note",
+    "handle_guidance_action",
     "llm_mod",
     "notify_diana",
     "notify_diana_approval",
     "notify_diana_escalation",
+    "notify_diana_guidance",
     "notify_diana_llm_failure",
     "review_escalation",
     "save_example",
