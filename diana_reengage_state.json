@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "last_scan_at": "2026-07-13T17:33:04.999463+00:00",
+  "last_scan_at": "2026-07-13T18:56:58.278418+00:00",
   "users": {
     "777001": {
-      "last_vip_inbound_at": "2026-07-13T00:30:20.328337+00:00",
+      "last_vip_inbound_at": "2026-07-13T19:19:46.915556+00:00",
       "last_reengage_at": null,
       "reengage_sent_for_inbound_at": null,
       "bc_id": "bc_test",

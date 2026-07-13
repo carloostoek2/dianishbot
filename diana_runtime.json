@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "reply_gen": {},
+  "chat_bc": {},
+  "chat_meta": {},
+  "pending_msg": {},
+  "history": {},
+  "timers": [],
+  "pending_approval": {},
+  "pending_escalations": {
+    "-1": {
+      "chat_id": 777001,
+      "bc_id": "bc_test",
+      "username": "vip",
+      "gen": 0,
+      "source": "keyword",
+      "reason": "test",
+      "matched": "",
+      "trigger_text": "hola",
+      "verdict": null
+    }
+  },
+  "pending_guidance": {}
+}
