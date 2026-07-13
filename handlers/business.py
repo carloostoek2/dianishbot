@@ -200,6 +200,12 @@ async def _handle_business_message(
                 chat_id, "assistant", text,
                 persist=persist_manual,
             )
+        from .callbacks.guidance import supersede_guidance_for_chat
+        n_super = await supersede_guidance_for_chat(chat_id)
+        if n_super:
+            log.info(
+                f"Guidance supersedida x{n_super} — owner inbound chat {chat_id}"
+            )
         if chat_id in timers:
             timers.pop(chat_id).cancel()
             _clear_timer_schedule(chat_id)

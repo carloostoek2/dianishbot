@@ -54,6 +54,12 @@ pending_approval: dict[int, dict] = {}
 # Escalaciones pendientes de triage: {esc_id: {chat_id, bc_id, username, gen, source, reason, matched, trigger_text, verdict}}
 pending_escalations: dict[int, dict] = {}
 
+# Consultas de zona gris abiertas (persisted): {gid: {chat_id, bc_id, username, gen, topic, gap_question, draft_response, confidence, created_at, ...}}
+pending_guidance: dict[int, dict] = {}
+
+# Captura free-text de respuesta a guidance: {admin_id: guidance_id} — runtime-only, NOT persisted
+awaiting_guidance_answer: dict[int, int] = {}
+
 # Metadatos de chats observados (no autorizados): {chat_id: {vip_id, username}}
 chat_meta: dict[int, dict] = {}
 
@@ -83,6 +89,8 @@ def _active_chat_ids() -> set[int]:
         ids.add(pending["chat_id"])
     for pending in pending_escalations.values():
         ids.add(pending["chat_id"])
+    for pending in pending_guidance.values():
+        ids.add(pending["chat_id"])
     return {cid for cid in ids if not _runtime_excluded(cid)}
 
 
@@ -110,6 +118,10 @@ def _build_runtime_snapshot() -> dict:
             str(k): v for k, v in pending_escalations.items()
             if not _runtime_excluded(v.get("chat_id", 0))
         },
+        "pending_guidance": {
+            str(k): v for k, v in pending_guidance.items()
+            if not _runtime_excluded(v.get("chat_id", 0))
+        },
     }
 
 
@@ -120,6 +132,7 @@ def _save_runtime_state() -> None:
         not snapshot["timers"]
         and not snapshot["pending_approval"]
         and not snapshot["pending_escalations"]
+        and not snapshot["pending_guidance"]
     ):
         if path.exists():
             try:
@@ -168,11 +181,15 @@ def _load_runtime_state() -> None:
         pending_escalations.clear()
         for k, v in data.get("pending_escalations", {}).items():
             pending_escalations[int(k)] = dict(v)
-        if timer_schedule or pending_approval or pending_escalations:
+        pending_guidance.clear()
+        for k, v in data.get("pending_guidance", {}).items():
+            pending_guidance[int(k)] = dict(v)
+        if timer_schedule or pending_approval or pending_escalations or pending_guidance:
             log.info(
                 f"Runtime restaurado: {len(timer_schedule)} timer(s), "
                 f"{len(pending_approval)} borrador(es), "
-                f"{len(pending_escalations)} escalación(es)"
+                f"{len(pending_escalations)} escalación(es), "
+                f"{len(pending_guidance)} guidance(s)"
             )
     except Exception as e:
         log.error(f"Error cargando runtime: {e}")

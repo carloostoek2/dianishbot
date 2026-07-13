@@ -117,6 +117,10 @@ def clear_chat_state(chat_id: int) -> None:
         if pending.get("chat_id") == chat_id:
             state.pending_escalations.pop(esc_id, None)
 
+    for gid, pending in list(state.pending_guidance.items()):
+        if pending.get("chat_id") == chat_id:
+            state.pending_guidance.pop(gid, None)
+
     state._clear_timer_schedule(chat_id)
     state._save_runtime_state()
 

@@ -8,6 +8,7 @@ from telegram.ext import ContextTypes
 from config import DIANA_ADMIN_CHAT_ID
 from state import (
     awaiting_correction,
+    awaiting_guidance_answer,
     awaiting_note,
     chat_write_lock,
     history,
@@ -218,6 +219,7 @@ async def handle_approval_action(
             )
             return
         awaiting_correction.pop(cq.from_user.id, None)
+        awaiting_guidance_answer.pop(cq.from_user.id, None)
         awaiting_note[cq.from_user.id] = {
             "user_id": pending["chat_id"],
             "username": pending["username"],
@@ -249,6 +251,7 @@ async def handle_approval_action(
             await cq.answer("Espera a que termine la regeneración")
             return
         await _clear_awaiting_note_with_prompt_restore(context.bot, cq.from_user.id)
+        awaiting_guidance_answer.pop(cq.from_user.id, None)
         awaiting_correction[cq.from_user.id] = ex_id
         variant = _selected_variant(pending)
         await cq.answer()

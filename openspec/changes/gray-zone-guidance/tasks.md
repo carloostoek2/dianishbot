@@ -49,17 +49,17 @@ Specs: gap signal · flag-off zero change · store/match API. DoD: tables; pure 
 Specs: freeze · g: UI · free-text exclusion · persist/re-notify · owner supersede · sandbox · escalation wins.
 **Freeze invariant:** no deliver / mark_as_read / simulate_typing / reengage / save_example of gap draft.
 
-- [ ] 2.1 **RED** runtime/state tests: `pending_guidance` persist; `awaiting_guidance_answer` not persisted
-- [ ] 2.2 **GREEN** `state.py`: both dicts; snapshot/load; `_active_chat_ids`
-- [ ] 2.3 **RED** `tests/unit/test_guidance_callbacks.py`: g:answer/use_draft/skip; free-text; mutual exclusion; expired/unauth
-- [ ] 2.4 **GREEN** `handlers/callbacks/guidance.py` + `g` in `__init__.py`; router: admin_note→**guidance**→note→correction
-- [ ] 2.5 **RED** timer guidance tests: gap+no match→consult+notify; never save/approve/deliver/read/type; flag off; escalation>gap
-- [ ] 2.6 **GREEN** Extract shared **save→approve|deliver** helper (`timer.py` or `callbacks/shared.py`); wire normal timer exit + `g:use_draft`
-- [ ] 2.7 **GREEN** `timer.py` gap branch after escalation, before `save_example`; freeze + finish timer
-- [ ] 2.8 **GREEN** `reengagement.py`: `_has_pending_guidance` block
-- [ ] 2.9 **GREEN** `data_pause.py`/`sandbox.py`: clear pending; no real policy/consult writes
-- [ ] 2.10 **GREEN** `business.py` owner inbound→supersede; `recovery.py` restore+re-notify
-- [ ] 2.11 **Freeze invariant suite** + full suite green
+- [x] 2.1 **RED** runtime/state tests: `pending_guidance` persist; `awaiting_guidance_answer` not persisted
+- [x] 2.2 **GREEN** `state.py`: both dicts; snapshot/load; `_active_chat_ids`
+- [x] 2.3 **RED** `tests/unit/test_guidance_callbacks.py`: g:answer/use_draft/skip; free-text; mutual exclusion; expired/unauth
+- [x] 2.4 **GREEN** `handlers/callbacks/guidance.py` + `g` in `__init__.py`; router: admin_note→**guidance**→note→correction
+- [x] 2.5 **RED** timer guidance tests: gap+no match→consult+notify; never save/approve/deliver/read/type; flag off; escalation>gap
+- [x] 2.6 **GREEN** Extract shared **save→approve|deliver** helper (`timer.py` or `callbacks/shared.py`); wire normal timer exit + `g:use_draft`
+- [x] 2.7 **GREEN** `timer.py` gap branch after escalation, before `save_example`; freeze + finish timer
+- [x] 2.8 **GREEN** `reengagement.py`: `_has_pending_guidance` block
+- [x] 2.9 **GREEN** `data_pause.py`/`sandbox.py`: clear pending; no real policy/consult writes
+- [x] 2.10 **GREEN** `business.py` owner inbound→supersede; `recovery.py` restore+re-notify
+- [x] 2.11 **Freeze invariant suite** + full suite green
 
 ---
 
