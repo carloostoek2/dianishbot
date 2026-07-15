@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "last_scan_at": "2026-07-13T18:56:58.278418+00:00",
+  "last_scan_at": "2026-07-15T14:57:14.882366+00:00",
   "users": {
     "777001": {
-      "last_vip_inbound_at": "2026-07-13T19:19:46.915556+00:00",
+      "last_vip_inbound_at": "2026-07-13T19:47:49.592918+00:00",
       "last_reengage_at": null,
       "reengage_sent_for_inbound_at": null,
       "bc_id": "bc_test",
@@ -17,7 +17,7 @@
       "username": "mickydomu"
     },
     "1266118954": {
-      "last_vip_inbound_at": "2026-07-13T00:19:17.943300+00:00",
+      "last_vip_inbound_at": "2026-07-15T12:41:26.091553+00:00",
       "last_reengage_at": null,
       "reengage_sent_for_inbound_at": null,
       "bc_id": "BmANWj394UUpAQAATlGppes-DFY",
@@ -52,7 +52,7 @@
       "username": ""
     },
     "6502396879": {
-      "last_vip_inbound_at": "2026-07-13T05:21:36.619232+00:00",
+      "last_vip_inbound_at": "2026-07-15T13:43:53.470129+00:00",
       "last_reengage_at": null,
       "reengage_sent_for_inbound_at": null,
       "bc_id": "BmANWj394UUpAQAATlGppes-DFY",
