@@ -595,15 +595,7 @@
       }
     ]
   },
-  "timers": [
-    {
-      "chat_id": 6502396879,
-      "username": "Megafdz",
-      "bc_id": "BmANWj394UUpAQAATlGppes-DFY",
-      "gen": 4,
-      "fire_at": "2026-07-19T06:54:57"
-    }
-  ],
+  "timers": [],
   "pending_approval": {
     "4503": {
       "chat_id": 6502396879,
@@ -660,6 +652,21 @@
           "response": "jshshs no fui al estadio, andaba aquí en mis cosas. Y lo del video sí amor, no se me ha olvidado, dame un ratito hoy y te mando algo 😊",
           "confidence": 70,
           "topic": "general"
+        }
+      ],
+      "selected": 0,
+      "regenerating": false
+    },
+    "4926": {
+      "chat_id": 6502396879,
+      "bc_id": "BmANWj394UUpAQAATlGppes-DFY",
+      "username": "Megafdz",
+      "gen": 4,
+      "variants": [
+        {
+          "response": "Ay cariño, discúlpame, no he podido antes pero ya voy a prepararlo, dame un ratito y te mando 😊 y gracias por la foto, me encantó 😉",
+          "confidence": 90,
+          "topic": "contenido"
         }
       ],
       "selected": 0,
