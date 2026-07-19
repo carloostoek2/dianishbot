@@ -1,7 +1,7 @@
 {
-  "provider": "anthropic",
+  "provider": "deepseek",
   "models": {
-    "deepseek": "deepseek-v4-pro",
+    "deepseek": "deepseek-v4-flash",
     "anthropic": "claude-haiku-4-5-20251001"
   }
 }
