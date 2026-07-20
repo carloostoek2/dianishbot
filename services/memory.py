@@ -301,7 +301,7 @@ class MemoryService:
         self,
         user_id: int,
         conversation: list[dict],
-        llm_call_fn,  # referencia a get_diana_response o función similar
+        llm_call_fn,  # raw_call: (content, fail_code, detail)
     ):
         """
         Llama al LLM en background para extraer hechos nuevos.
@@ -330,7 +330,7 @@ Claves válidas: name, occupation, location, interests, relationship, personalit
 Si no hay nada nuevo, responde {{}}.
 Ejemplo: {{"name": "Carlos", "interests": "gaming y música metal"}}"""
 
-        raw, _err = await llm_call_fn(
+        raw, fail_code, detail = await llm_call_fn(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=200,
             temperature=0.3,
@@ -338,6 +338,11 @@ Ejemplo: {{"name": "Carlos", "interests": "gaming y música metal"}}"""
         )
 
         if not raw:
+            log.warning(
+                f"memory extract LLM failed for user {user_id}: "
+                f"{fail_code or 'sin_contenido'}"
+                + (f" — {detail}" if detail else "")
+            )
             return
         response = raw
         try:
