@@ -6,11 +6,18 @@
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `BOT_TOKEN` | **Yes** | — | Telegram bot token from [@BotFather](https://t.me/BotFather). Loaded via `python-dotenv` at startup. Startup fails if missing. |
-| `DEEPSEEK_KEY` | **Yes** | — | DeepSeek API bearer token for LLM calls. Startup fails if missing. |
-| `API_ID` | No | — | Telegram API ID for `extractor.py` only. Get from [my.telegram.org](https://my.telegram.org). |
-| `API_HASH` | No | — | Telegram API hash for `extractor.py` only. |
+| `LLM_PROVIDER` | No | `deepseek` | `deepseek` o `anthropic`. Define qué API key es obligatoria al arrancar. |
+| `DEEPSEEK_KEY` | **Yes*** | — | DeepSeek API key. Obligatoria si `LLM_PROVIDER=deepseek` (default). |
+| `DEEPSEEK_MODEL` | No | `deepseek-v4-pro` | Modelo DeepSeek (también configurable en runtime vía menú admin). |
+| `ANTHROPIC_KEY` | **Yes*** | — | Anthropic API key. Obligatoria si `LLM_PROVIDER=anthropic`. |
+| `ANTHROPIC_MODEL` | No | `claude-haiku-4-5-20251001` | Modelo Anthropic. |
+| `API_ID` | No | — | Telegram API ID for `extractor.py` / backfill. Get from [my.telegram.org](https://my.telegram.org). |
+| `API_HASH` | No | — | Telegram API hash for `extractor.py` / backfill. |
 | `TELEGRAM_API_ID` | No | — | Alias for `API_ID` accepted by `extractor.py`. |
 | `TELEGRAM_API_HASH` | No | — | Alias for `API_HASH` accepted by `extractor.py`. |
+| `DIANA_SYSTEM_PROMPT_FILE` | No | `diana_system_prompt.md` | Ruta al system prompt en disco. |
+
+\* Solo se exige la key del proveedor activo.
 
 Create `.env` from the template:
 
@@ -84,15 +91,19 @@ Beyond environment variables, runtime behavior is controlled by **constants in `
 
 ## Required vs optional settings
 
-**Startup will fail** if either required environment variable is absent:
+**Startup will fail** if `BOT_TOKEN` or the active LLM key is absent:
 
 ```python
 # diana.py main() — raises SystemExit
+provider = llm_settings.get_provider()
+llm_key_name = "ANTHROPIC_KEY" if provider == "anthropic" else "DEEPSEEK_KEY"
 missing = [name for name, val in (
     ("BOT_TOKEN", BOT_TOKEN),
-    ("DEEPSEEK_KEY", DEEPSEEK_KEY),
+    (llm_key_name, llm_key_val),
 ) if not val]
 ```
+
+Also fails if `diana_system_prompt.md` (or `DIANA_SYSTEM_PROMPT_FILE`) is missing/empty.
 
 All other settings have defaults defined in `config.py` or are created at runtime (SQLite DB, JSON state files).
 

@@ -12,7 +12,7 @@
 | `pytest.ini`, `pyproject.toml` test config | Not configured (defaults) |
 | CI workflow with test steps | Not found |
 
-**Dependencies:** `pip install pytest pytest-asyncio` (not pinned in repo).
+**Dependencies:** `pip install -r requirements-dev.txt` (incluye `pytest` y `pytest-asyncio`).
 
 **Fixtures:** `tests/conftest.py` — PTB 22.8-compatible mocks (`make_mock_update`, `make_mock_callback_update`, `make_context`, `test_db`, `admin_user`).
 
@@ -20,7 +20,7 @@
 
 ```bash
 source venv/bin/activate
-pip install pytest pytest-asyncio
+pip install -r requirements-dev.txt
 PYTHONPATH=. pytest tests/ -v
 ```
 

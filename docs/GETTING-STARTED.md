@@ -5,20 +5,19 @@
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Python | >= 3.14 | Project uses CPython 3.14 locally |
+| Python | >= 3.13 | Probado con CPython 3.13 / 3.14 |
 | pip | Latest | For installing dependencies into a venv |
 | Telegram account | — | Diana's account with **Chat Automation** enabled |
 | Telegram bot | — | Created via [@BotFather](https://t.me/BotFather) |
-| DeepSeek API key | — | For LLM responses |
+| DeepSeek API key | — | For LLM responses (or Anthropic if `LLM_PROVIDER=anthropic`) |
 
-**Python packages** (install via pip):
+**Python packages** — ver `requirements.txt` (runtime) y `requirements-dev.txt` (tests):
 
-- `python-telegram-bot` >= 21.0 (tested with 22.8)
+- `python-telegram-bot` >= 21.0 (probado con 22.x)
 - `python-dotenv`
 - `aiohttp`
-- `telethon` (optional — only for `extractor.py`)
-
-There is no `requirements.txt` or `pyproject.toml` in the repository — install packages manually or generate a lockfile locally.
+- `telethon` (backfill de historial VIP + `extractor.py`)
+- `pytest` / `pytest-asyncio` (solo desarrollo)
 
 ## Installation steps
 
@@ -39,7 +38,9 @@ source venv/bin/activate
 3. **Install dependencies**
 
 ```bash
-pip install "python-telegram-bot>=21.0" python-dotenv aiohttp
+pip install -r requirements.txt
+# desarrollo / tests:
+# pip install -r requirements-dev.txt
 ```
 
 4. **Configure environment variables**
@@ -48,12 +49,17 @@ pip install "python-telegram-bot>=21.0" python-dotenv aiohttp
 cp .env.example .env
 ```
 
-Edit `.env` and set:
+Edit `.env` and set at least:
 
 ```
 BOT_TOKEN=your_telegram_bot_token
+LLM_PROVIDER=deepseek
 DEEPSEEK_KEY=your_deepseek_api_key
 ```
+
+Opcional: `ANTHROPIC_KEY` si usas `LLM_PROVIDER=anthropic`; `API_ID` / `API_HASH` para Telethon (extractor y backfill).
+
+Asegura que exista `diana_system_prompt.md` en la raíz (persona del bot; no va en git).
 
 5. **Connect Chat Automation**
 

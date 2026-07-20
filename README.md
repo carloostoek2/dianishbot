@@ -7,19 +7,16 @@ Telegram Business Chat Automation bot that covers VIP conversations on Diana's a
 
 ```bash
 git clone <repository-url>
-cd diana
+cd dianishbot
 python3 -m venv venv
 source venv/bin/activate
-pip install "python-telegram-bot>=21.0" python-dotenv aiohttp
+pip install -r requirements.txt          # runtime
+# pip install -r requirements-dev.txt    # + pytest (desarrollo)
 cp .env.example .env
 # Edit .env with your BOT_TOKEN and DEEPSEEK_KEY
 ```
 
-For the optional chat-history extractor, also install Telethon:
-
-```bash
-pip install telethon
-```
+`telethon` (incluido en `requirements.txt`) se usa para backfill de historial VIP y `extractor.py`.
 
 ## Quick start
 

@@ -26,8 +26,8 @@ This is an interpreted Python project with no build step. Common commands:
 |---------|-------------|
 | `python diana.py` | Start the bot (long-polling) |
 | `source venv/bin/activate` | Activate the virtual environment |
-| `pip install "python-telegram-bot>=21.0" python-dotenv aiohttp` | Install runtime dependencies |
-| `pip install telethon` | Install extractor dependency |
+| `pip install -r requirements.txt` | Install runtime dependencies |
+| `pip install -r requirements-dev.txt` | Install runtime + pytest |
 | `python extractor.py list` | List exportable Telegram chats (requires API credentials) |
 
 There is no `Makefile`, `package.json`, or CI pipeline in the repository.

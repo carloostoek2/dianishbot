@@ -1,0 +1,14 @@
+# Diana Business Bot — dependencias de runtime
+# Python recomendado: 3.13+ (probado con 3.13 / 3.14)
+
+# Telegram Bot API (Business Connections / Chat Automation)
+python-telegram-bot>=21.0,<23
+
+# Variables de entorno (.env)
+python-dotenv>=1.0
+
+# HTTP async (LLM DeepSeek/Anthropic + delivery helpers)
+aiohttp>=3.9
+
+# Historial VIP (backfill) y extractor.py — Telethon user API
+telethon>=1.34
