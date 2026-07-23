@@ -158,5 +158,9 @@ python diana.py
 python extractor.py list
 python extractor.py export --chat <id> --format training --import-db
 
+# Review training examples (local UI — approve keep / discard delete)
+python scripts/review_training.py
+# open http://127.0.0.1:8765  ·  A=approve  D=discard  ·  --reset to restart queue
+
 # Testing
 PYTHONPATH=. pytest tests/
